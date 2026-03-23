@@ -7,4 +7,4 @@ metadata:
 spec:
   kubeletConfig:
     podsPerCore: 0
-    maxPods: 500
+    maxPods: 400
