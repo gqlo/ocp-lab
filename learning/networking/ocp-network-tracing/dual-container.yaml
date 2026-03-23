@@ -8,7 +8,7 @@ spec:
   containers:
   - name: nettools-container-1
     image: quay.io/rh_ee_lguoqing/nettools-fedora:latest
-    command: 
+    command:
     - /bin/sh
     - -c
     - |

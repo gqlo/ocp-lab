@@ -73,9 +73,9 @@ spec:
       - name: default
         pod: {}
       volumes:
-        - name: rhel9-lvm
-          dataVolume:
-            name: rhel9-lvm
-        - name: dedicate-b-lvm
-          dataVolume:
-            name: dedicate-b-lvm
+      - name: rhel9-lvm
+        dataVolume:
+          name: rhel9-lvm
+      - name: dedicate-b-lvm
+        dataVolume:
+          name: dedicate-b-lvm

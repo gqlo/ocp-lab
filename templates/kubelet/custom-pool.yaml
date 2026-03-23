@@ -8,9 +8,7 @@ metadata:
 spec:
   machineConfigSelector:
     matchExpressions:
-      - {key: machineconfiguration.openshift.io/role, operator: In, values: [worker,custom]}
+      - {key: machineconfiguration.openshift.io/role, operator: In, values: [worker, custom]}
   nodeSelector:
     matchLabels:
       node-role.kubernetes.io/custom: ""
-
-

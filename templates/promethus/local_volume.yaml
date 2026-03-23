@@ -2,20 +2,20 @@ apiVersion: "local.storage.openshift.io/v1"
 kind: "LocalVolume"
 metadata:
   name: "local-disks"
-  namespace: "openshift-local-storage" 
+  namespace: "openshift-local-storage"
 spec:
-  nodeSelector: 
+  nodeSelector:
     nodeSelectorTerms:
     - matchExpressions:
-        - key: kubernetes.io/hostname
-          operator: In
-          values:
-          - f09-h03-000-1029u
-          - f09-h02-000-1029u 
+      - key: kubernetes.io/hostname
+        operator: In
+        values:
+        - f09-h03-000-1029u
+        - f09-h02-000-1029u
   storageClassDevices:
-    - storageClassName: "promdb-local-sc" 
-      forceWipeDevicesAndDestroyAllData: false 
-      volumeMode: Filesystem 
-      fsType: xfs 
-      devicePaths: 
-        - /dev/disk/by-path/pci-0000:00:17.0-ata-3 
+  - storageClassName: "promdb-local-sc"
+    forceWipeDevicesAndDestroyAllData: false
+    volumeMode: Filesystem
+    fsType: xfs
+    devicePaths:
+    - /dev/disk/by-path/pci-0000:00:17.0-ata-3

@@ -2,7 +2,7 @@ apiVersion: grafana.integreatly.org/v1beta1
 kind: GrafanaDatasource
 metadata:
   name: grafana-ds
-  namespace: openshift-user-workload-monitoring  
+  namespace: openshift-user-workload-monitoring
 spec:
   valuesFrom:
     - targetPath: "secureJsonData.httpHeaderValue1"

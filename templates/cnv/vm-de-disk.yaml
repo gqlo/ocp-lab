@@ -3,6 +3,7 @@ kind: VirtualMachine
 metadata:
   name: rhel9-dedicate-io
   annotations:
+    # yamllint disable-line rule:line-length
     hooks.kubevirt.io/hookSidecars: '[{"args": ["--version", "v1alpha3"], "image": "kubevirt/sidecar-shim:20240108_99b6c4bdb", "configMap": {"name": "sidecar-script", "key": "my_script.sh", "hookPath": "/usr/bin/onDefineDomain"}}]'
 spec:
   dataVolumeTemplates:
@@ -101,12 +102,12 @@ spec:
       - name: default
         pod: {}
       volumes:
-        - name: dedicate-a
-          dataVolume:
-            name: dedicate-a
-        - name: dedicate-b
-          dataVolume:
-            name: dedicate-b
-        - name: dedicate-c
-          dataVolume:
-            name: dedicate-c
+      - name: dedicate-a
+        dataVolume:
+          name: dedicate-a
+      - name: dedicate-b
+        dataVolume:
+          name: dedicate-b
+      - name: dedicate-c
+        dataVolume:
+          name: dedicate-c

@@ -43,6 +43,7 @@ spec:
   template:
     metadata:
       annotations:
+        # yamllint disable-line rule:line-length
         hooks.kubevirt.io/hookSidecars: '[{"args": ["--version", "v1alpha2"], "image": "quay.io/kubevirt/sidecar-shim:20240108_99b6c4bdb", "configMap": {"name": "sidecar-script", "key": "my_script.sh", "hookPath": "/usr/bin/onDefineDomain"}}]'
       labels:
         kubevirt.io/domain: rhel9
@@ -84,9 +85,9 @@ spec:
       - name: default
         pod: {}
       volumes:
-        - name: vda
-          dataVolume:
-            name: vda
-        - name: vdb
-          dataVolume:
-            name: vdb 
+      - name: vda
+        dataVolume:
+          name: vda
+      - name: vdb
+        dataVolume:
+          name: vdb

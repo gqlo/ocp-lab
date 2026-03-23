@@ -41,5 +41,5 @@ spec:
         pod: {}
       volumes:
       - dataVolume:
-          name: rhel9-base 
+          name: rhel9-base
         name: vda

@@ -81,5 +81,5 @@ spec:
           name: root-placeholder
         name: vda
       - dataVolume:
-          name: data-placeholder 
+          name: data-placeholder
         name: vdb

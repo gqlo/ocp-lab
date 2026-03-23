@@ -1,23 +1,23 @@
 apiVersion: local.storage.openshift.io/v1alpha1
 kind: LocalVolumeSet
 metadata:
- name: local-nvme-volume
- namespace: openshift-local-storage
+  name: local-nvme-volume
+  namespace: openshift-local-storage
 spec:
- nodeSelector:
-   nodeSelectorTerms:
-     - matchExpressions:
-         - key: cluster.ocs.openshift.io/openshift-storage
-           operator: In
-           values:
-             - ""
- storageClassName: local-nvme-volume
- volumeMode: Block
- maxDeviceCount: 1  
- deviceInclusionSpec:
-   deviceTypes:
-   - disk
-   models:
-   - MZQLB960HAJR-00007 
-   deviceMechanicalProperties:
-   - NonRotational
+  nodeSelector:
+    nodeSelectorTerms:
+      - matchExpressions:
+          - key: cluster.ocs.openshift.io/openshift-storage
+            operator: In
+            values:
+              - ""
+  storageClassName: local-nvme-volume
+  volumeMode: Block
+  maxDeviceCount: 1
+  deviceInclusionSpec:
+    deviceTypes:
+      - disk
+    models:
+      - MZQLB960HAJR-00007
+    deviceMechanicalProperties:
+      - NonRotational

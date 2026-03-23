@@ -80,9 +80,9 @@ spec:
       - name: default
         pod: {}
       volumes:
-        - name: vda
-          dataVolume:
-            name: root-placeholder
-        - name: vdb
-          dataVolume:
-            name: data-placeholder 
+      - name: vda
+        dataVolume:
+          name: root-placeholder
+      - name: vdb
+        dataVolume:
+          name: data-placeholder

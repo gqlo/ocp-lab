@@ -13,7 +13,7 @@ data:
         metadata:
           name: prometheusdb
         spec:
-          storageClassName: promdb-local-sc 
+          storageClassName: promdb-local-sc
           resources:
             requests:
               storage: 894Gi

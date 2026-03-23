@@ -9,7 +9,7 @@ spec:
     - name: vg-nvme
       deviceSelector:
         paths:
-        - /dev/disk/by-path/pci-0000:86:00.0-nvme-1 
+        - /dev/disk/by-path/pci-0000:86:00.0-nvme-1
       thinPoolConfig:
         name: nvme-thin-pool
         sizePercent: 90
@@ -17,8 +17,7 @@ spec:
       nodeSelector:
         nodeSelectorTerms:
         - matchExpressions:
-            - key: kubernetes.io/hostname
-              operator: In
-              values:
-              - f09-h04-000-1029u
-
+          - key: kubernetes.io/hostname
+            operator: In
+            values:
+            - f09-h04-000-1029u

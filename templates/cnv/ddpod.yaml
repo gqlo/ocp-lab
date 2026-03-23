@@ -5,8 +5,8 @@ metadata:
 spec:
   containers:
   - name: block-writer
-    image: quay.io/rh_ee_lguoqing/ebpf_94 
-    command: ["/bin/sleep", "infinity"]  
+    image: quay.io/rh_ee_lguoqing/ebpf_94
+    command: ["/bin/sleep", "infinity"]
     securityContext:
       privileged: true
     resources:
@@ -16,9 +16,9 @@ spec:
       requests:
         cpu: 100m
         memory: 60M
-    volumeDevices:  
+    volumeDevices:
     - name: blank-1tb-disk
-      devicePath: /dev/xvdg 
+      devicePath: /dev/xvdg
     volumeMounts:
     - name: kernel-debug
       mountPath: /sys/kernel/debug

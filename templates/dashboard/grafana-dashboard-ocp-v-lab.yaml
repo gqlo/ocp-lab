@@ -7,6 +7,6 @@ metadata:
 spec:
   instanceSelector:
     matchLabels:
-      dashboards: grafana  
-  folder: "Openshift Virtualization"      
+      dashboards: grafana
+  folder: "Openshift Virtualization"
   url: https://raw.githubusercontent.com/openshift-virtualization/descheduler-psi-evaluation/refs/heads/main/monitoring/json/load_aware_rebalancing.json

@@ -5,13 +5,13 @@ metadata:
   name: static-content
 data:
   abc.txt: |
-    Hey Sonali! Welcome to Your OpenShift Adventure! 
+    Hey Sonali! Welcome to Your OpenShift Adventure!
 
     You just deployed your first containerized app!
 
     Fun fact: This message is coming from a ConfigMap,
     served by nginx running in a pod, exposed through
-    an OpenShift route. 
+    an OpenShift route.
 
     Keep crushing it, Sonali!
 ---
@@ -24,7 +24,7 @@ data:
     server {
         listen 8080;
         server_name localhost;
-        
+
         location / {
             root /usr/share/nginx/html;
             autoindex on;
@@ -99,4 +99,3 @@ spec:
     name: static-server
   port:
     targetPort: 8080
-

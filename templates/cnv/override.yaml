@@ -1,6 +1,6 @@
 override: rhel-vm.yaml
 memory: 16G
-cpu: 
+cpu:
   cores: 4
   threads: 2
-  sockets: 2 
+  sockets: 2

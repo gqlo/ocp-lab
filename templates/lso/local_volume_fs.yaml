@@ -7,13 +7,13 @@ spec:
   nodeSelector:
     nodeSelectorTerms:
     - matchExpressions:
-        - key: kubernetes.io/hostname
-          operator: In
-          values:
-          - e40-h36-000-r650.rdu2.scalelab.redhat.com
-          - f30-h21-000-r640.rdu2.scalelab.redhat.com
+      - key: kubernetes.io/hostname
+        operator: In
+        values:
+        - e40-h36-000-r650.rdu2.scalelab.redhat.com
+        - f30-h21-000-r640.rdu2.scalelab.redhat.com
   storageClassDevices:
-    - storageClassName: "promdb-lso"
-      volumeMode: Filesystem
-      devicePaths:
-        - /dev/sdc
+  - storageClassName: "promdb-lso"
+    volumeMode: Filesystem
+    devicePaths:
+    - /dev/sdc

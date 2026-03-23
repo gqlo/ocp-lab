@@ -1,6 +1,6 @@
 apiVersion: v1
 data:
-  ca-bundle.crt: | 
+  ca-bundle.crt: |
     -----BEGIN CERTIFICATE-----
     MIIGYzCCBEugAwIBAgIED/0Q3TANBgkqhkiG9w0BAQsFADBNMRAwDgYDVQQKEwdS
     ZWQgSGF0MQ0wCwYDVQQLEwRwcm9kMSowKAYDVQQDEyEyMDIzIENlcnRpZmljYXRl
@@ -37,8 +37,8 @@ data:
     ox3XeRq47OQd2dgOxhSuJ8k6LQb51y396TIiazzTZvAZMR5ZQqHPrKFoKDH48Iym
     VNipQ16T1nK15+svswlRN7rzJGAcbA/eHG7QMplF+XUjEs6DT8ePzxofnjwi/4wd
     mED+3ak9eA==
-    -----END CERTIFICATE----- 
+    -----END CERTIFICATE-----
 kind: ConfigMap
 metadata:
-  name: user-ca-bundle-proxy-registry 
-  namespace: openshift-config 
+  name: user-ca-bundle-proxy-registry
+  namespace: openshift-config

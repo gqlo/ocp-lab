@@ -3,6 +3,7 @@ kind: VirtualMachine
 metadata:
   name: rhel9-placeholder
   annotations:
+    # yamllint disable-line rule:line-length
     hooks.kubevirt.io/hookSidecars: '[{"args": ["--version", "v1alpha3"], "image": "kubevirt/sidecar-shim:20240108_99b6c4bdb", "configMap": {"name": "sidecar-script", "key": "my_script.sh", "hookPath": "/usr/bin/onDefineDomain"}}]'
 spec:
   dataVolumeTemplates:
@@ -83,9 +84,9 @@ spec:
       - name: default
         pod: {}
       volumes:
-        - name: vda
-          dataVolume:
-            name: root-placeholder
-        - name: vdb
-          dataVolume:
-            name: data-placeholder 
+      - name: vda
+        dataVolume:
+          name: root-placeholder
+      - name: vdb
+        dataVolume:
+          name: data-placeholder

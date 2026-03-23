@@ -32,7 +32,7 @@ spec:
       terminationGracePeriod: 0
       volumes:
       # kubectl create configmap config --from-file desched-taint.sh
-        - name: "script"
-          configMap:
-            name: "desched-taint"
+      - name: "script"
+        configMap:
+          name: "desched-taint"
 status: {}

@@ -96,12 +96,12 @@ spec:
       - name: default
         pod: {}
       volumes:
-        - name: vda
-          dataVolume:
-            name: root-placeholder
-        - name: vdb
-          dataVolume:
-            name: data-placeholder 
-        - name: vdc
-          dataVolume:
-            name: data-2-placeholder 
+      - name: vda
+        dataVolume:
+          name: root-placeholder
+      - name: vdb
+        dataVolume:
+          name: data-placeholder
+      - name: vdc
+        dataVolume:
+          name: data-2-placeholder

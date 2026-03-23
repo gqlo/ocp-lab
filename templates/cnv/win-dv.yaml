@@ -4,8 +4,8 @@ metadata:
   name: win11
 spec:
   source:
-      http:
-         url: http://192.168.0.1:8000/win11.qcow2
+    http:
+      url: http://192.168.0.1:8000/win11.qcow2
   pvc:
     accessModes:
       - ReadWriteMany

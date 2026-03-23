@@ -2,7 +2,7 @@ apiVersion: kubevirt.io/v1
 kind: VirtualMachine
 metadata:
   labels:
-    app: testvm 
+    app: testvm
   name: testvm
 spec:
   runStrategy: Always
@@ -67,7 +67,7 @@ spec:
           userData: |-
             #cloud-config
             user: cloud-user
-            password: 100yard- 
+            password: 100yard-
             ssh_pwauth: True
             chpasswd: { expire: False }
         name: cloudinitdisk

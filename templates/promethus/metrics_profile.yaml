@@ -4,22 +4,21 @@ metrics:
 
   - query: sum(node_namespace_pod_container:container_cpu_usage_seconds_total:sum_irate{namespace="openshift-cnv" , container="virt-controller"}) by (pod, node)
     metricName: virt_controller_cpu_usage
- 
+
   - query: sum(node_namespace_pod_container:container_cpu_usage_seconds_total:sum_irate{namespace="openshift-cnv" , container="virt-api"}) by (pod, node)
     metricName: virt_api_cpu_usage
-  
-  - query: sum(node_namespace_pod_container:container_cpu_usage_seconds_total:sum_irate{namespace="openshift-cnv" , container="virt-handler"}) by (pod, node) 
+
+  - query: sum(node_namespace_pod_container:container_cpu_usage_seconds_total:sum_irate{namespace="openshift-cnv" , container="virt-handler"}) by (pod, node)
     metricName: virt_handler_cpu_usage
 
   - query: sum(container_memory_working_set_bytes{namespace="openshift-cnv", container="virt-api"}) by (pod, node)
     metricName: virt_api_mem_usage
-    
+
   - query: sum(container_memory_working_set_bytes{namespace="openshift-cnv", container="virt-controller"}) by (pod, node)
     metricName: virt_controller_mem_usage
-  
+
   - query: sum(container_memory_working_set_bytes{namespace="openshift-cnv", container="virt-operator"}) by (pod, node)
     metricName: virt_operator_mem_usage
 
   - query: sum(container_memory_working_set_bytes{namespace="openshift-cnv", container="virt-handler"}) by (pod, node)
     metricName: virt_handler_mem_usage
-  

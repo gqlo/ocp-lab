@@ -4,8 +4,8 @@ metadata:
   name: rhel9-lvm
 spec:
   source:
-      http:
-        url: http://198.18.10.1:8800/rhel9_uefi.qcow2
+    http:
+      url: http://198.18.10.1:8800/rhel9_uefi.qcow2
   pvc:
     accessModes:
       - ReadWriteOnce

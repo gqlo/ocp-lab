@@ -26,7 +26,7 @@ spec:
   - apiVersion: cdi.kubevirt.io/v1beta1
     kind: DataVolume
     metadata:
-            name: dedicate-single-disk
+      name: dedicate-single-disk
     spec:
       pvc:
         accessModes:
@@ -80,9 +80,9 @@ spec:
       - name: default
         pod: {}
       volumes:
-        - name: dedicate-root
-          dataVolume:
-            name: dedicate-root
-        - name: dedicate-single-disk
-          dataVolume:
-            name: dedicate-single-disk
+      - name: dedicate-root
+        dataVolume:
+          name: dedicate-root
+      - name: dedicate-single-disk
+        dataVolume:
+          name: dedicate-single-disk
