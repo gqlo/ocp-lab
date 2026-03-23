@@ -1,0 +1,422 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  annotations:
+    k8s.ovn.org/pod-networks: '{"default":{"ip_addresses":["10.131.1.149/23"],"mac_address":"0a:58:0a:83:01:95","gateway_ips":["10.131.0.1"],"routes":[{"dest":"10.128.0.0/14","nextHop":"10.131.0.1"},{"dest":"172.30.0.0/16","nextHop":"10.131.0.1"},{"dest":"169.254.0.5/32","nextHop":"10.131.0.1"},{"dest":"100.64.0.0/16","nextHop":"10.131.0.1"}],"ip_address":"10.131.1.149/23","gateway_ip":"10.131.0.1","role":"primary"}}'
+    k8s.v1.cni.cncf.io/network-status: |-
+      [{
+          "name": "ovn-kubernetes",
+          "interface": "eth0",
+          "ips": [
+              "10.131.1.149"
+          ],
+          "mac": "0a:58:0a:83:01:95",
+          "default": true,
+          "dns": {}
+      }]
+    openshift.io/required-scc: hostpath-provisioner-csi
+    openshift.io/scc: hostpath-provisioner-csi
+  creationTimestamp: "2026-01-13T21:20:38Z"
+  generateName: hostpath-provisioner-csi-
+  labels:
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/managed-by: hostpath-provisioner-operator
+    app.kubernetes.io/part-of: hyperconverged-cluster
+    app.kubernetes.io/version: 4.18.23
+    controller-revision-hash: 59f4c97fb6
+    k8s-app: hostpath-provisioner
+    pod-template-generation: "1"
+    prometheus.hostpathprovisioner.kubevirt.io: "true"
+  name: hostpath-provisioner-csi-6hv74
+  namespace: openshift-cnv
+  ownerReferences:
+  - apiVersion: apps/v1
+    blockOwnerDeletion: true
+    controller: true
+    kind: DaemonSet
+    name: hostpath-provisioner-csi
+    uid: 14c7bbde-9320-4c01-9d00-408ff08b5cf6
+  resourceVersion: "183429976"
+  uid: 5c72124f-0640-4cd3-b7ad-2cd8b4f6e8dc
+spec:
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchFields:
+          - key: metadata.name
+            operator: In
+            values:
+            - m42-h31-000-r650
+  containers:
+  - args:
+    - --drivername=kubevirt.io.hostpath-provisioner
+    - --v=1
+    - --endpoint=$(CSI_ENDPOINT)
+    - --nodeid=$(NODE_NAME)
+    - --version=$(VERSION)
+    - --datadir=$(PV_DIR)
+    env:
+    - name: CSI_ENDPOINT
+      value: unix:///csi/csi.sock
+    - name: NODE_NAME
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: spec.nodeName
+    - name: PV_DIR
+      value: '[{"name":"hpp-volumes","path":"hpp-volumes-data-dir/csi"}]'
+    - name: VERSION
+      value: v4.18.23
+    image: registry.redhat.io/container-native-virtualization/hostpath-csi-driver-rhel9@sha256:2ba1cd81020b98f1ef462d97fdf150f2f75789778222da409a9008a2ecae8a5b
+    imagePullPolicy: IfNotPresent
+    livenessProbe:
+      failureThreshold: 5
+      httpGet:
+        path: /healthz
+        port: 9898
+        scheme: HTTP
+      initialDelaySeconds: 10
+      periodSeconds: 2
+      successThreshold: 1
+      timeoutSeconds: 3
+    name: hostpath-provisioner
+    ports:
+    - containerPort: 9898
+      name: healthz
+      protocol: TCP
+    - containerPort: 8080
+      name: metrics
+      protocol: TCP
+    resources:
+      requests:
+        cpu: 10m
+        memory: 150Mi
+    securityContext:
+      capabilities:
+        drop:
+        - KILL
+        - MKNOD
+        - SETGID
+        - SETUID
+      privileged: true
+    terminationMessagePath: /dev/termination-log
+    terminationMessagePolicy: File
+    volumeMounts:
+    - mountPath: /var/lib/kubelet/plugins
+      mountPropagation: Bidirectional
+      name: plugins-dir
+    - mountPath: /var/lib/kubelet/pods
+      mountPropagation: Bidirectional
+      name: mountpoint-dir
+    - mountPath: /csi
+      name: socket-dir
+    - mountPath: /hpp-volumes-data-dir
+      mountPropagation: HostToContainer
+      name: hpp-volumes-data-dir
+    - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      name: kube-api-access-52d74
+      readOnly: true
+  - args:
+    - --v=1
+    - --csi-address=/csi/csi.sock
+    - --kubelet-registration-path=/var/lib/kubelet/plugins/csi-hostpath/csi.sock
+    env:
+    - name: KUBE_NODE_NAME
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: spec.nodeName
+    image: registry.redhat.io/openshift4/ose-csi-node-driver-registrar-rhel9@sha256:74d4871c4803557bf56b7eb7cf26c6c44c035e7ad464d8ba68476ecc03ffcfce
+    imagePullPolicy: IfNotPresent
+    name: node-driver-registrar
+    resources:
+      requests:
+        cpu: 10m
+        memory: 150Mi
+    securityContext:
+      capabilities:
+        drop:
+        - KILL
+        - MKNOD
+        - SETGID
+        - SETUID
+      privileged: true
+    terminationMessagePath: /dev/termination-log
+    terminationMessagePolicy: File
+    volumeMounts:
+    - mountPath: /csi
+      name: socket-dir
+    - mountPath: /registration
+      name: registration-dir
+    - mountPath: /hpp-volumes-data-dir
+      mountPropagation: HostToContainer
+      name: hpp-volumes-data-dir
+    - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      name: kube-api-access-52d74
+      readOnly: true
+  - args:
+    - --csi-address=/csi/csi.sock
+    - --health-port=9898
+    image: registry.redhat.io/openshift4/ose-csi-livenessprobe-rhel9@sha256:fef6da9a292e1d58f20daa8271c5cf9c4f518901c7f05d97fd9a484e30751594
+    imagePullPolicy: IfNotPresent
+    name: liveness-probe
+    resources:
+      requests:
+        cpu: 10m
+        memory: 150Mi
+    securityContext:
+      capabilities:
+        drop:
+        - KILL
+        - MKNOD
+        - SETGID
+        - SETUID
+    terminationMessagePath: /dev/termination-log
+    terminationMessagePolicy: File
+    volumeMounts:
+    - mountPath: /csi
+      name: socket-dir
+    - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      name: kube-api-access-52d74
+      readOnly: true
+  - args:
+    - --v=1
+    - --csi-address=/csi/csi.sock
+    - --feature-gates=Topology=true
+    - --enable-capacity=true
+    - --capacity-for-immediate-binding=true
+    - --extra-create-metadata=true
+    - --immediate-topology=false
+    - --strict-topology=true
+    - --node-deployment=true
+    - --default-fstype=xfs
+    env:
+    - name: NAMESPACE
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: metadata.namespace
+    - name: POD_NAME
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: metadata.name
+    - name: NODE_NAME
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: spec.nodeName
+    image: registry.redhat.io/openshift4/ose-csi-external-provisioner-rhel9@sha256:b09beee4b33028789ac77eccb2cea6b0c2a0210e59e149b8ef5b1fd681df93bf
+    imagePullPolicy: IfNotPresent
+    name: csi-provisioner
+    resources:
+      requests:
+        cpu: 10m
+        memory: 150Mi
+    securityContext:
+      capabilities:
+        drop:
+        - KILL
+        - MKNOD
+        - SETGID
+        - SETUID
+      privileged: true
+    terminationMessagePath: /dev/termination-log
+    terminationMessagePolicy: File
+    volumeMounts:
+    - mountPath: /csi
+      name: socket-dir
+    - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      name: kube-api-access-52d74
+      readOnly: true
+  dnsPolicy: ClusterFirst
+  enableServiceLinks: true
+  nodeName: m42-h31-000-r650
+  nodeSelector:
+    node-role.kubernetes.io/worker: ""
+  preemptionPolicy: PreemptLowerPriority
+  priority: 0
+  restartPolicy: Always
+  schedulerName: default-scheduler
+  securityContext: {}
+  serviceAccount: hostpath-provisioner-admin-csi
+  serviceAccountName: hostpath-provisioner-admin-csi
+  terminationGracePeriodSeconds: 30
+  tolerations:
+  - effect: NoExecute
+    key: node.kubernetes.io/not-ready
+    operator: Exists
+  - effect: NoExecute
+    key: node.kubernetes.io/unreachable
+    operator: Exists
+  - effect: NoSchedule
+    key: node.kubernetes.io/disk-pressure
+    operator: Exists
+  - effect: NoSchedule
+    key: node.kubernetes.io/memory-pressure
+    operator: Exists
+  - effect: NoSchedule
+    key: node.kubernetes.io/pid-pressure
+    operator: Exists
+  - effect: NoSchedule
+    key: node.kubernetes.io/unschedulable
+    operator: Exists
+  volumes:
+  - hostPath:
+      path: /var/lib/kubelet/plugins/csi-hostpath
+      type: DirectoryOrCreate
+    name: socket-dir
+  - hostPath:
+      path: /var/lib/kubelet/pods
+      type: DirectoryOrCreate
+    name: mountpoint-dir
+  - hostPath:
+      path: /var/lib/kubelet/plugins_registry
+      type: Directory
+    name: registration-dir
+  - hostPath:
+      path: /var/lib/kubelet/plugins
+      type: Directory
+    name: plugins-dir
+  - hostPath:
+      path: /mnt/hpp-pool
+      type: DirectoryOrCreate
+    name: hpp-volumes-data-dir
+  - name: kube-api-access-52d74
+    projected:
+      defaultMode: 420
+      sources:
+      - serviceAccountToken:
+          expirationSeconds: 3607
+          path: token
+      - configMap:
+          items:
+          - key: ca.crt
+            path: ca.crt
+          name: kube-root-ca.crt
+      - downwardAPI:
+          items:
+          - fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.namespace
+            path: namespace
+      - configMap:
+          items:
+          - key: service-ca.crt
+            path: service-ca.crt
+          name: openshift-service-ca.crt
+status:
+  conditions:
+  - lastProbeTime: null
+    lastTransitionTime: "2026-01-13T21:20:49Z"
+    status: "True"
+    type: PodReadyToStartContainers
+  - lastProbeTime: null
+    lastTransitionTime: "2026-01-13T21:20:38Z"
+    status: "True"
+    type: Initialized
+  - lastProbeTime: null
+    lastTransitionTime: "2026-01-13T21:20:49Z"
+    status: "True"
+    type: Ready
+  - lastProbeTime: null
+    lastTransitionTime: "2026-01-13T21:20:49Z"
+    status: "True"
+    type: ContainersReady
+  - lastProbeTime: null
+    lastTransitionTime: "2026-01-13T21:20:38Z"
+    status: "True"
+    type: PodScheduled
+  containerStatuses:
+  - containerID: cri-o://f630718d550659cb6dde8e249e21e63eff142234f4c1070f1f6043fe3449672b
+    image: registry.redhat.io/openshift4/ose-csi-external-provisioner-rhel9@sha256:b09beee4b33028789ac77eccb2cea6b0c2a0210e59e149b8ef5b1fd681df93bf
+    imageID: registry.redhat.io/openshift4/ose-csi-external-provisioner-rhel9@sha256:680fd6619cdc308cfa11d969dd39f1fcabb5596895c063688512656e23dbf355
+    lastState: {}
+    name: csi-provisioner
+    ready: true
+    restartCount: 0
+    started: true
+    state:
+      running:
+        startedAt: "2026-01-13T21:20:48Z"
+    volumeMounts:
+    - mountPath: /csi
+      name: socket-dir
+    - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      name: kube-api-access-52d74
+      readOnly: true
+      recursiveReadOnly: Disabled
+  - containerID: cri-o://b5912d889ea630dbec98bbe0f97313f98d5feff2603757b9ebc5b61318e56374
+    image: registry.redhat.io/container-native-virtualization/hostpath-csi-driver-rhel9@sha256:2ba1cd81020b98f1ef462d97fdf150f2f75789778222da409a9008a2ecae8a5b
+    imageID: registry.redhat.io/container-native-virtualization/hostpath-csi-driver-rhel9@sha256:2ba1cd81020b98f1ef462d97fdf150f2f75789778222da409a9008a2ecae8a5b
+    lastState: {}
+    name: hostpath-provisioner
+    ready: true
+    restartCount: 0
+    started: true
+    state:
+      running:
+        startedAt: "2026-01-13T21:20:41Z"
+    volumeMounts:
+    - mountPath: /var/lib/kubelet/plugins
+      name: plugins-dir
+    - mountPath: /var/lib/kubelet/pods
+      name: mountpoint-dir
+    - mountPath: /csi
+      name: socket-dir
+    - mountPath: /hpp-volumes-data-dir
+      name: hpp-volumes-data-dir
+    - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      name: kube-api-access-52d74
+      readOnly: true
+      recursiveReadOnly: Disabled
+  - containerID: cri-o://ebe65293077c09b79e3bb2251bc3ddec99d6008a5868f4ba085c4181b886b010
+    image: registry.redhat.io/openshift4/ose-csi-livenessprobe-rhel9@sha256:fef6da9a292e1d58f20daa8271c5cf9c4f518901c7f05d97fd9a484e30751594
+    imageID: registry.redhat.io/openshift4/ose-csi-livenessprobe-rhel9@sha256:b66bbf093cd69de010fb9a293701ec313dbe04c9122ee0784e0c27303c9d3dd2
+    lastState: {}
+    name: liveness-probe
+    ready: true
+    restartCount: 0
+    started: true
+    state:
+      running:
+        startedAt: "2026-01-13T21:20:45Z"
+    volumeMounts:
+    - mountPath: /csi
+      name: socket-dir
+    - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      name: kube-api-access-52d74
+      readOnly: true
+      recursiveReadOnly: Disabled
+  - containerID: cri-o://113e9857c96072ed191a0eb0fbb4272345d62e6b145b932c758c7f26346b9fcb
+    image: registry.redhat.io/openshift4/ose-csi-node-driver-registrar-rhel9@sha256:74d4871c4803557bf56b7eb7cf26c6c44c035e7ad464d8ba68476ecc03ffcfce
+    imageID: registry.redhat.io/openshift4/ose-csi-node-driver-registrar-rhel9@sha256:74d4871c4803557bf56b7eb7cf26c6c44c035e7ad464d8ba68476ecc03ffcfce
+    lastState: {}
+    name: node-driver-registrar
+    ready: true
+    restartCount: 0
+    started: true
+    state:
+      running:
+        startedAt: "2026-01-13T21:20:43Z"
+    volumeMounts:
+    - mountPath: /csi
+      name: socket-dir
+    - mountPath: /registration
+      name: registration-dir
+    - mountPath: /hpp-volumes-data-dir
+      name: hpp-volumes-data-dir
+    - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      name: kube-api-access-52d74
+      readOnly: true
+      recursiveReadOnly: Disabled
+  hostIP: 198.18.0.8
+  hostIPs:
+  - ip: 198.18.0.8
+  phase: Running
+  podIP: 10.131.1.149
+  podIPs:
+  - ip: 10.131.1.149
+  qosClass: Burstable
+  startTime: "2026-01-13T21:20:38Z"

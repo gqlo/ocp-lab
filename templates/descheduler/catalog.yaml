@@ -1,0 +1,10 @@
+apiVersion: operators.coreos.com/v1alpha1
+kind: CatalogSource
+metadata:
+  name: kube-descheduler-operator
+  namespace: openshift-marketplace
+spec:
+  sourceType: grpc
+  image: registry-proxy.engineering.redhat.com/rh-osbs/iib@sha256:698e80dc54fbf0a1c7f2a5ac1a7ff2ec5f72435024157a2a12bba00060b5c116 
+  displayName: KDO
+  publisher: Red Hat

@@ -1,3 +1,39 @@
 # ocp-workspace
-This workspace contains various scripts, templates, and configurations related to the OpenShift Container Platform (OCP). These resources are designed to assist with tasks such as automation, customization, and deployment in an OCP virtualization environment.
-<!-- markdown-toc start - Don't edit this section. Run M-x markdown-toc-generate-toc again -->
+
+A collection of learning materials, scripts, and templates for OCP. Includes hands-on guides for network tracing, eBPF, and OVN/OVS internals, along with reusable templates.
+
+## Structure
+
+```
+ocp-workspace/
+├── learning/
+│   ├── ebpf/
+│   └── networking/
+│       ├── dns-resolution-issue/
+│       └── ocp-network-tracing/
+├── scripts/
+│   ├── ceph/
+│   ├── cnv/
+│   ├── io/
+│   ├── node/
+│   ├── others/
+│   └── promethus/
+├── templates/
+│   ├── cnv/
+│   ├── dashboard/
+│   ├── descheduler/
+│   ├── haproxy/
+│   ├── hpp/
+│   ├── kubelet/
+│   ├── kvm/
+│   ├── lso/
+│   ├── lvm/
+│   ├── managedCluster/
+│   ├── mce/
+│   ├── metallb/
+│   ├── multus/
+│   ├── nginx/
+│   ├── odf/
+│   ├── promethus/
+│   └── systemd/
+```
