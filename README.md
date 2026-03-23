@@ -1,11 +1,11 @@
-# ocp-workspace
+# ocp-lab
 
 A collection of learning materials, scripts, and templates for OCP. Includes hands-on guides for network tracing, eBPF, and OVN/OVS internals, along with reusable templates.
 
 ## Structure
 
 ```
-ocp-workspace/
+ocp-lab/
 ├── learning/
 │   ├── ebpf/
 │   └── networking/
