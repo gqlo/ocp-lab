@@ -1,0 +1,66 @@
+Chassis "4cb19102-b8f6-4baa-8595-e1b0192cfee1"
+    hostname: ee37-h10-000-r760
+    Encap geneve
+        ip: "198.18.10.7"
+        options: {csum="true"}
+    Port_Binding tstor-ee37-h10-000-r760
+Chassis "7389199a-39a8-4785-b6f0-deec49785856"
+    hostname: ee37-h12-000-r760
+    Encap geneve
+        ip: "198.18.10.8"
+        options: {csum="true"}
+    Port_Binding tstor-ee37-h12-000-r760
+Chassis "03f8f665-6511-4d69-8c76-67aa7b6af397"
+    hostname: ee37-h08-000-r760
+    Encap geneve
+        ip: "198.18.10.6"
+        options: {csum="true"}
+    Port_Binding tstor-ee37-h08-000-r760
+Chassis "eb9192d1-6f44-4ffe-a26e-d8ec52af6fbc"
+    hostname: ee37-h14-000-r760
+    Encap geneve
+        ip: "198.18.10.9"
+        options: {csum="true"}
+    Port_Binding jtor-GR_ee37-h14-000-r760
+    Port_Binding default_virt-launcher-vma-1-b5sl4
+    Port_Binding default_virt-launcher-vma-4-snstq
+    Port_Binding openshift-cnv_virt-handler-4rzw7
+    Port_Binding openshift-storage_vg-manager-fmz5t
+    Port_Binding openshift-insights_insights-runtime-extractor-rjljz
+    Port_Binding cr-rtos-ee37-h14-000-r760
+    Port_Binding openshift-cnv_kubemacpool-mac-controller-manager-9767c45d-qvlw5
+    Port_Binding rtoe-GR_ee37-h14-000-r760
+    Port_Binding openshift-cnv_kubevirt-console-plugin-85f678d89f-9mslj
+    Port_Binding openshift-monitoring_metrics-server-7cd6f5689c-kj8l7
+    Port_Binding ocp-network-trace_nettools-dual-pod
+    Port_Binding openshift-monitoring_alertmanager-main-0
+    Port_Binding k8s-ee37-h14-000-r760
+    Port_Binding openshift-ingress-canary_ingress-canary-s8v8z
+    Port_Binding openshift-network-console_networking-console-plugin-8ff58c5f-k9kck
+    Port_Binding etor-GR_ee37-h14-000-r760
+    Port_Binding openshift-cnv_virt-operator-87cfd567d-8pd7d
+    Port_Binding openshift-cnv_kube-cni-linux-bridge-plugin-86bh6
+    Port_Binding openshift-monitoring_monitoring-plugin-64fb7c8469-jk2tb
+    Port_Binding openshift-cnv_virt-template-validator-7c46d5cf4d-zpbww
+    Port_Binding openshift-dns_dns-default-zwgqq
+    Port_Binding openshift-monitoring_prometheus-k8s-0
+    Port_Binding openshift-monitoring_thanos-querier-59f58697cb-grpsq
+    Port_Binding default_virt-launcher-vma-8-l9tg5
+    Port_Binding rtoj-GR_ee37-h14-000-r760
+    Port_Binding openshift-cnv_kubevirt-apiserver-proxy-85bb466dc9-l45vw
+    Port_Binding openshift-monitoring_prometheus-operator-admission-webhook-6f65b7c597-dqlnd
+    Port_Binding powerstore_powerstore-controller-ff4cbfdb7-7bdrd
+    Port_Binding openshift-network-diagnostics_network-check-target-l2zcq
+    Port_Binding openshift-multus_network-metrics-daemon-bc667
+Chassis "3ad18d67-7a36-41d5-b17d-5e6a8f947f37"
+    hostname: ee37-h16-000-r760
+    Encap geneve
+        ip: "198.18.10.10"
+        options: {csum="true"}
+    Port_Binding tstor-ee37-h16-000-r760
+Chassis "1531f387-0191-4678-838f-67b24e819146"
+    hostname: ee37-h06-000-r760
+    Encap geneve
+        ip: "198.18.10.5"
+        options: {csum="true"}
+    Port_Binding tstor-ee37-h06-000-r760

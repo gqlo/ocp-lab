@@ -1,0 +1,218 @@
+sh-5.1# ovn-nbctl show 
+switch bf445e04-930d-4377-9fe1-e22be7b2600c (join)
+    port jtor-ovn_cluster_router
+        type: router
+        router-port: rtoj-ovn_cluster_router
+    port jtor-GR_ee37-h14-000-r760
+        type: router
+        router-port: rtoj-GR_ee37-h14-000-r760
+switch a4e252f9-787c-4a64-9bba-832d783319c7 (transit_switch)
+    port tstor-ee37-h16-000-r760
+        type: remote
+        addresses: ["0a:58:64:58:00:07 100.88.0.7/16"]
+    port tstor-ee37-h08-000-r760
+        type: remote
+        addresses: ["0a:58:64:58:00:02 100.88.0.2/16"]
+    port tstor-ee37-h06-000-r760
+        type: remote
+        addresses: ["0a:58:64:58:00:04 100.88.0.4/16"]
+    port tstor-ee37-h12-000-r760
+        type: remote
+        addresses: ["0a:58:64:58:00:05 100.88.0.5/16"]
+    port tstor-ee37-h14-000-r760
+        type: router
+        router-port: rtots-ee37-h14-000-r760
+    port tstor-ee37-h10-000-r760
+        type: remote
+        addresses: ["0a:58:64:58:00:03 100.88.0.3/16"]
+switch f4b9b76a-6390-44b3-9892-2c89d9d2f677 (ee37-h14-000-r760)
+    port openshift-monitoring_monitoring-plugin-64fb7c8469-jk2tb
+        addresses: ["0a:58:0a:80:02:0d 10.128.2.13"]
+    port openshift-cnv_virt-operator-87cfd567d-8pd7d
+        addresses: ["0a:58:0a:80:02:12 10.128.2.18"]
+    port openshift-monitoring_metrics-server-7cd6f5689c-kj8l7
+        addresses: ["0a:58:0a:80:02:10 10.128.2.16"]
+    port powerstore_powerstore-controller-ff4cbfdb7-7bdrd
+        addresses: ["0a:58:0a:80:02:08 10.128.2.8"]
+    port default_virt-launcher-vma-8-l9tg5
+        addresses: ["0a:58:0a:80:02:2c 10.128.2.44"]
+    port openshift-insights_insights-runtime-extractor-rjljz
+        addresses: ["0a:58:0a:80:02:0c 10.128.2.12"]
+    port openshift-network-diagnostics_network-check-target-l2zcq
+        addresses: ["0a:58:0a:80:02:03 10.128.2.3"]
+    port openshift-cnv_kubemacpool-mac-controller-manager-9767c45d-qvlw5
+        addresses: ["0a:58:0a:80:02:11 10.128.2.17"]
+    port openshift-multus_network-metrics-daemon-bc667
+        addresses: ["0a:58:0a:80:02:04 10.128.2.4"]
+    port default_virt-launcher-vma-4-snstq
+        addresses: ["0a:58:0a:80:02:2a 10.128.2.42"]
+    port openshift-storage_vg-manager-fmz5t
+        addresses: ["0a:58:0a:80:02:1f 10.128.2.31"]
+    port openshift-monitoring_prometheus-operator-admission-webhook-6f65b7c597-dqlnd
+        addresses: ["0a:58:0a:80:02:09 10.128.2.9"]
+    port ocp-network-trace_nettools-dual-pod
+        addresses: ["0a:58:0a:80:02:49 10.128.2.73"]
+    port openshift-cnv_kube-cni-linux-bridge-plugin-86bh6
+        addresses: ["0a:58:0a:80:03:88 10.128.3.136"]
+    port stor-ee37-h14-000-r760
+        type: router
+        router-port: rtos-ee37-h14-000-r760
+    port openshift-ingress-canary_ingress-canary-s8v8z
+        addresses: ["0a:58:0a:80:02:0a 10.128.2.10"]
+    port default_virt-launcher-vma-1-b5sl4
+        addresses: ["0a:58:0a:80:02:29 10.128.2.41"]
+    port openshift-cnv_kubevirt-console-plugin-85f678d89f-9mslj
+        addresses: ["0a:58:0a:80:02:0f 10.128.2.15"]
+    port openshift-dns_dns-default-zwgqq
+        addresses: ["0a:58:0a:80:02:05 10.128.2.5"]
+    port k8s-ee37-h14-000-r760
+        addresses: ["0a:58:0a:80:02:02 10.128.2.2"]
+    port openshift-monitoring_prometheus-k8s-0
+        addresses: ["0a:58:0a:80:02:13 10.128.2.19"]
+    port openshift-monitoring_alertmanager-main-0
+        addresses: ["0a:58:0a:80:02:14 10.128.2.20"]
+    port openshift-cnv_virt-template-validator-7c46d5cf4d-zpbww
+        addresses: ["0a:58:0a:80:02:0e 10.128.2.14"]
+    port openshift-monitoring_thanos-querier-59f58697cb-grpsq
+        addresses: ["0a:58:0a:80:02:0b 10.128.2.11"]
+    port openshift-network-console_networking-console-plugin-8ff58c5f-k9kck
+        addresses: ["0a:58:0a:80:02:06 10.128.2.6"]
+    port openshift-cnv_virt-handler-4rzw7
+        addresses: ["0a:58:0a:80:03:8c 10.128.3.140"]
+    port openshift-cnv_kubevirt-apiserver-proxy-85bb466dc9-l45vw
+        addresses: ["0a:58:0a:80:02:07 10.128.2.7"]
+switch 3f79ce9b-1087-4751-8b1d-0e9de331056c (ext_ee37-h14-000-r760)
+    port br-ex_ee37-h14-000-r760
+        type: localnet
+        addresses: ["unknown"]
+    port etor-GR_ee37-h14-000-r760
+        type: router
+        addresses: ["b4:83:51:1d:d7:22"]
+        router-port: rtoe-GR_ee37-h14-000-r760
+router 3fdfb121-6de4-4d18-8867-d27b321c3b9d (GR_ee37-h14-000-r760)
+    port rtoe-GR_ee37-h14-000-r760
+        mac: "b4:83:51:1d:d7:22"
+        ipv6-lla: "fe80::b683:51ff:fe1d:d722"
+        networks: ["198.18.10.9/24"]
+    port rtoj-GR_ee37-h14-000-r760
+        mac: "0a:58:64:40:00:06"
+        ipv6-lla: "fe80::858:64ff:fe40:6"
+        networks: ["100.64.0.6/16"]
+    nat 02aac048-0ce5-4692-a1b4-715b4446f0a1
+        external ip: "198.18.10.9"
+        logical ip: "10.128.2.6"
+        type: "snat"
+    nat 1e3e761a-8d7e-4fb7-a1ab-4b161610dc9e
+        external ip: "198.18.10.9"
+        logical ip: "10.128.2.41"
+        type: "snat"
+    nat 204b115f-340b-4134-bd47-973407b4b3b9
+        external ip: "198.18.10.9"
+        logical ip: "10.128.2.8"
+        type: "snat"
+    nat 2dd62b36-96c4-4830-9d5c-0a24b6ead17b
+        external ip: "198.18.10.9"
+        logical ip: "10.128.2.73"
+        type: "snat"
+    nat 33715672-a568-4d4b-87d2-387e4b42410a
+        external ip: "198.18.10.9"
+        logical ip: "10.128.2.11"
+        type: "snat"
+    nat 3a929d1a-b696-49da-a267-f8bcf95abb51
+        external ip: "198.18.10.9"
+        logical ip: "100.64.0.6"
+        type: "snat"
+    nat 432463c0-f7c8-4a19-9ba2-d78da90bafef
+        external ip: "198.18.10.9"
+        logical ip: "10.128.3.136"
+        type: "snat"
+    nat 4352c013-469b-4719-a8f0-894fda7c0742
+        external ip: "198.18.10.9"
+        logical ip: "10.128.2.3"
+        type: "snat"
+    nat 48cf5884-480e-4df3-9a1a-789ded65d1e1
+        external ip: "198.18.10.9"
+        logical ip: "10.128.2.7"
+        type: "snat"
+    nat 4fedd439-89ec-4c2a-8870-637cd2d3a074
+        external ip: "198.18.10.9"
+        logical ip: "10.128.2.16"
+        type: "snat"
+    nat 5d305407-6be9-46a5-a7bf-b296ead670a2
+        external ip: "198.18.10.9"
+        logical ip: "10.128.2.20"
+        type: "snat"
+    nat 6034f106-3247-4d81-9e6b-1e6624d4c834
+        external ip: "198.18.10.9"
+        logical ip: "10.128.2.14"
+        type: "snat"
+    nat 603cd8c2-564e-4e5e-beb0-94c5461eaf64
+        external ip: "198.18.10.9"
+        logical ip: "10.128.2.13"
+        type: "snat"
+    nat 671034cd-4ff7-4390-80dd-0ced2ed7ff9c
+        external ip: "198.18.10.9"
+        logical ip: "10.128.2.5"
+        type: "snat"
+    nat 7df48176-5df6-4557-92d8-fe71a2df766b
+        external ip: "198.18.10.9"
+        logical ip: "10.128.2.9"
+        type: "snat"
+    nat c7ff9d24-0281-40c9-ad20-29f346bc6840
+        external ip: "198.18.10.9"
+        logical ip: "10.128.2.31"
+        type: "snat"
+    nat d0b4d255-ef5d-483e-a2c0-65396b0ce5f4
+        external ip: "198.18.10.9"
+        logical ip: "10.128.2.15"
+        type: "snat"
+    nat d11557d3-b213-4cef-baf0-15f634d2241f
+        external ip: "198.18.10.9"
+        logical ip: "10.128.2.17"
+        type: "snat"
+    nat d517f65f-30d5-4f2e-8bd3-05f645cf2bca
+        external ip: "198.18.10.9"
+        logical ip: "10.128.2.42"
+        type: "snat"
+    nat d9ee41d3-6a2b-4a17-831c-8849d7282a62
+        external ip: "198.18.10.9"
+        logical ip: "10.128.2.18"
+        type: "snat"
+    nat da21c864-2b75-4a21-ba67-7b8f0000085a
+        external ip: "198.18.10.9"
+        logical ip: "10.128.3.140"
+        type: "snat"
+    nat db8efcbe-a479-4865-92d4-2b27131c1a1d
+        external ip: "198.18.10.9"
+        logical ip: "10.128.2.4"
+        type: "snat"
+    nat e62fc5f0-9429-42dc-9212-9c88d1c31a52
+        external ip: "198.18.10.9"
+        logical ip: "10.128.2.12"
+        type: "snat"
+    nat e75feecd-0ea6-4756-a5f5-fc57da5c68f4
+        external ip: "198.18.10.9"
+        logical ip: "10.128.2.44"
+        type: "snat"
+    nat e7b94fe4-f4ea-49b0-a7d2-db01354ae8a1
+        external ip: "198.18.10.9"
+        logical ip: "10.128.2.10"
+        type: "snat"
+    nat efc0ac9e-1fa2-479a-9bf5-e38f2578784e
+        external ip: "198.18.10.9"
+        logical ip: "10.128.2.19"
+        type: "snat"
+router dfe58c53-61a1-4164-987e-a72a5833acc9 (ovn_cluster_router)
+    port rtos-ee37-h14-000-r760
+        mac: "0a:58:0a:80:02:01"
+        ipv6-lla: "fe80::858:aff:fe80:201"
+        networks: ["10.128.2.1/23"]
+        gateway chassis: [eb9192d1-6f44-4ffe-a26e-d8ec52af6fbc]
+    port rtoj-ovn_cluster_router
+        mac: "0a:58:64:40:00:01"
+        ipv6-lla: "fe80::858:64ff:fe40:1"
+        networks: ["100.64.0.1/16"]
+    port rtots-ee37-h14-000-r760
+        mac: "0a:58:64:58:00:06"
+        ipv6-lla: "fe80::858:64ff:fe58:6"
+        networks: ["100.88.0.6/16"]
