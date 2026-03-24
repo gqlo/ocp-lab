@@ -50,41 +50,7 @@ This directory provides a comprehensive set of tools for network analysis, packe
 
 ### Dockerfile
 
-The `Dockerfile` builds a container image based on Fedora that includes a set of networking and troubleshooting tools:
-
-**Network Analysis Tools:**
-- `tcpdump` - Packet capture and analysis
-- `wireshark-cli` - Command-line network protocol analyzer
-- `conntrack-tools` - Connection tracking utilities
-
-**Network Utilities:**
-- `iproute`, `iputils` - IP and routing management
-- `bind-utils` - DNS troubleshooting (dig, nslookup)
-- `net-tools` - Traditional networking utilities (ifconfig, netstat)
-- `bridge-utils`, `ethtool` - Bridge and Ethernet interface management
-
-**Network Testing:**
-- `curl`, `wget` - HTTP/HTTPS testing
-- `nmap-ncat`, `nc` - Network connectivity testing
-- `iperf3` - Network performance testing
-- `nmap` - Network scanning
-- `traceroute` - Route tracing
-- `telnet` - Interactive network testing
-- `socat` - Multipurpose relay tool
-
-**Monitoring Tools:**
-- `iftop` - Network interface bandwidth monitoring
-- `iotop` - I/O monitoring
-- `htop` - Process monitoring
-- `mtr` - Network diagnostic tool
-
-**System Tools:**
-- `procps-ng` - Process utilities
-- `lsof` - List open files/connections
-- `strace` - System call tracing
-
-**Utilities:**
-- `bash-completion`, `vim`, `less` - Enhanced shell experience
+The `Dockerfile` builds a container image based on Fedora that installs packages for packet capture and protocol decoding (`tcpdump`, `wireshark-cli`), connection tracking (`conntrack-tools`), IP/DNS/routing and L2 tooling (`iproute`, `iputils`, `bind-utils`, `net-tools`, `bridge-utils`, `ethtool`), HTTP and general connectivity testing (`curl`, `wget`, `nmap-ncat`, `nc`, `iperf3`, `nmap`, `traceroute`, `telnet`, `socat`), interface and process monitoring (`iftop`, `iotop`, `htop`, `mtr`), process and syscall inspection (`procps-ng`, `lsof`, `strace`), and shell conveniences (`bash-completion`, `vim`, `less`).
 
 ### YAML Manifests
 
