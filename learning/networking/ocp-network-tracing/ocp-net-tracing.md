@@ -11,6 +11,11 @@
   - [Pushing the Image to Quay](#pushing-the-image-to-quay)
   - [Deploying the Test Application](#deploying-the-test-application)
 - [Tracing](#tracing)
+  - [Cluster Network](#cluster-network)
+    - [Cluster network: cidr versus hostPrefix](#cluster-network-cidr-versus-hostprefix)
+    - [How many IP addresses are in a /14?](#how-many-ip-addresses-are-in-a-14)
+    - [This lab cluster (reference snapshot)](#this-lab-cluster-reference-snapshot)
+    - [Example: pod IP versus ClusterIP (ovn-tracing)](#example-pod-ip-versus-clusterip-ovn-tracing)
   - [Container-to-Container Communication](#container-to-container-communication)
     - [Shared Network Namespace](#shared-network-namespace)
     - [Process Isolation](#process-isolation)
@@ -112,6 +117,180 @@ oc apply -f dual-container.yaml
 ---
 
 ## Tracing
+
+### Cluster Network
+
+Before capturing or reading OVN output, it helps to know how **pod addresses**, **Service ClusterIPs**, and **per-node slices** of the overlay relate to each other. On OpenShift 4 with **OVNKubernetes**, the cluster-wide picture lives in the **`Network`** config object.
+
+**Cluster and service CIDRs** (authoritative for “which range is which”):
+
+```bash
+oc get network.config cluster -o yaml
+```
+
+Example output (this lab cluster):
+
+```yaml
+apiVersion: config.openshift.io/v1
+kind: Network
+metadata:
+  creationTimestamp: "2026-02-05T15:49:04Z"
+  generation: 3
+  name: cluster
+  resourceVersion: "34341"
+  uid: 3eb7e7d5-fd19-49d5-ae28-76b6f67ccc7e
+spec:
+  clusterNetwork:
+  - cidr: 10.128.0.0/14
+    hostPrefix: 23
+  externalIP:
+    policy: {}
+  networkDiagnostics:
+    mode: ""
+    sourcePlacement: {}
+    targetPlacement: {}
+  networkType: OVNKubernetes
+  serviceNetwork:
+  - 172.30.0.0/16
+status:
+  clusterNetwork:
+  - cidr: 10.128.0.0/14
+    hostPrefix: 23
+  clusterNetworkMTU: 1400
+  conditions:
+  - lastTransitionTime: "2026-02-05T16:29:09Z"
+    message: ""
+    observedGeneration: 0
+    reason: AsExpected
+    status: "True"
+    type: NetworkDiagnosticsAvailable
+  networkType: OVNKubernetes
+  serviceNetwork:
+  - 172.30.0.0/16
+```
+
+#### Cluster network: cidr versus hostPrefix
+
+Under **`clusterNetwork[*]`** the two fields answer different questions:
+
+- **`cidr`** (e.g. **`10.128.0.0/14`**) — The **single aggregate IPv4 range** from which **all** default **pod** addresses are taken. That is the **whole pool** (in this example, **10.128.0.0** through **10.131.255.255**). It does **not** by itself define how that range is split across workers.
+- **`hostPrefix`** (e.g. **23**) — How the CNI **slices** that pool per **Kubernetes node**. The name **“host”** here means **the node (machine)**, not an individual pod. **`hostPrefix: 23`** means **each node’s pod subnet is a `/23`** (e.g. **512** addresses in that slice; see [How many IP addresses are in a /14?](#how-many-ip-addresses-are-in-a-14)). **`hostPrefix`** is **not** a second top-level CIDR next to **`cidr`**; it is only the **mask length of each node’s share** of the **`cidr`**.
+
+**Summary:** **`cidr`** = **total address space** for the overlay pod network; **`hostPrefix`** = **size of each node’s subnet** carved from that space. In a typical install, **`status.clusterNetwork`** mirrors **`spec.clusterNetwork`** once the CNI is healthy.
+
+**Changing the cluster network CIDR or `hostPrefix`:** Red Hat documents the supported procedure in [Configuring the cluster network range](https://docs.redhat.com/en/documentation/openshift_container_platform/4.20/html/configuring_network_settings/configuring-cluster-network-range) (OpenShift Container Platform 4.20) [[4]](#references).
+
+**“Cluster network” vs “pod network”:** In **`Network`**, **cluster network** is the CIDR the **default CNI** uses for **pod IPs** (the addresses you see on **`eth0`** in an ordinary pod). That is the **same overlay everyone calls the pod network** for that interface. It is **not** the **Service** range (**`serviceNetwork`** / ClusterIPs), **not** the **machine** network under **`Infrastructure`**, and **not** addresses from **secondary interfaces** attached via **Multus**—those use separate definitions.
+
+- **`spec.clusterNetwork` / `status.clusterNetwork`** — Together, **`cidr`** plus **`hostPrefix`** define the pod IP layout as above.
+- **`spec.serviceNetwork` / `status.serviceNetwork`** — CIDR for **Kubernetes Service ClusterIPs** (separate from pod addresses).
+- **`status.clusterNetworkMTU`** — Effective MTU for the pod network (often **1400** on OVN overlay so encapsulation does not force fragmentation on common paths).
+- **`networkType`** — Confirms the plugin (e.g. **OVNKubernetes**).
+
+#### How many IP addresses are in a /14?
+
+This example uses **`10.128.0.0/14`** with **`hostPrefix: 23`**, matching the **`Network`** object above.
+
+For IPv4, the number of addresses in **`CIDR/x`** is **2^(32 − x)**.
+
+| Prefix | Host bits | Addresses | Notes |
+| ------ | --------- | --------- | ----- |
+| **`/14`** | **18** | **262,144** (**2^18**) | Covers **10.128.0.0**–**10.131.255.255** — the entire **pod** cluster pool in this example. |
+| **`/23`** (per node) | **9** | **512** (**2^9**) | One **node pod subnet** when **`hostPrefix: 23`**. |
+
+**How those fit together:** The **`/14`** is split into non-overlapping **`/23`** blocks: **2^18 ÷ 2^9 = 2^9 = 512** such chunks in the address space, so at most **512** node-sized **`/23`** slices can be carved from a single flat **`/14`** (ignoring real-world reservation rules your installer or CNI may apply). In practice, **not every address** is a running pod (gateways, reserved patterns, and allocator behavior reduce what you can schedule), but **order-of-magnitude** capacity is **hundreds of thousands** of addresses in the overlay and **hundreds of pod slots per node subnet** with this design.
+
+**Per-node pod subnet** (which `hostPrefix` slice belongs to which node) — On **OVNKubernetes**, each **Node** usually has a **`k8s.ovn.org/node-subnets`** annotation. That is the authoritative map from **node name** → **pod CIDR** for the default network. Some older material uses **`oc get hostsubnet` / `HostSubnet`**; that resource is not present on every API server, so use the annotation first:
+
+```bash
+oc get nodes -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.metadata.annotations.k8s\.ovn\.org/node-subnets}{"\n"}{end}'
+```
+
+Each line should be a **`/23`** (when `hostPrefix: 23`) inside the **cluster network** CIDR. A pod IP from **`oc get pod -o wide`** must fall in the subnet of the node that runs that pod; the same names appear on the **node-named logical switch** in **`ovn-nbctl show`**.
+
+**Operator view** (MTU, Geneve port, and CNI tuning):
+
+```bash
+oc get networks.operator.openshift.io cluster -o yaml
+```
+
+**Node / platform underlay** (machine network, not the pod CIDR) — For **bare metal** and some platforms, **`Infrastructure`** records the **machine network** and API/ingress VIPs:
+
+```bash
+oc get infrastructure cluster -o yaml
+```
+
+Use **`network.config`** for pod and service CIDRs; use **node annotations** (or **`hostsubnet`** if your cluster exposes it) to pin a pod IP to a worker; use **`infrastructure`** for the L3 network the hosts and underlay use.
+
+**OVN internal router/switch networks** (for example **join** and **transit** addresses) are **not** listed in **`Network`**; they appear in **`ovn-nbctl show`** / **`ovn-sbctl show`** (see [Tracing a Packet from Pod to Pod (different node)](#tracing-a-packet-from-pod-to-pod-different-node)).
+
+#### This lab cluster (reference snapshot)
+
+The table below is a **one-time export** from this environment (OpenShift **4.21**, **OVNKubernetes**, **BareMetal**). Re-run the commands after you add workers or change the install. It is meant to line up the **roles** of each range with **concrete CIDRs** you can compare to your own **`oc`** output.
+
+| Role | CIDR / value | What it is |
+| ---- | -------------- | ---------- |
+| **Machine (node) network** | **198.18.0.0/16** | L3 network for **nodes** (and, here, API/ingress VIPs). **Not** used for pod or Service addresses. |
+| **API (internal)** | **198.18.0.3** | `apiServerInternalIP` from `infrastructure` (bare metal). |
+| **Ingress** | **198.18.0.4** | `ingressIP` (router / default entry) on the same underlay. |
+| **Cluster network (pods)** | **10.128.0.0/14** | All **default** pod IPs. `hostPrefix` **23** → one **/23** per node. |
+| **Service (ClusterIP) network** | **172.30.0.0/16** | All **ClusterIP** Service addresses. |
+| **Pod path MTU** | **1400** | `status.clusterNetworkMTU` in **`Network`**, and `ovnKubernetesConfig.mtu` in the **network** `operator`. |
+| **Geneve** | **UDP/6081** | `genevePort` in **networks.operator** (encapsulation between nodes; not an IP subnet). |
+
+**`oc` evidence (this cluster):**
+
+```text
+$ oc get network.config cluster -o jsonpath='{.status.clusterNetwork[0].cidr}{" hostPrefix="}{.status.clusterNetwork[0].hostPrefix}{"\n"}{"service "}{.status.serviceNetwork[0]}{"\n"}{"mtu "}{.status.clusterNetworkMTU}{"\n"}'
+10.128.0.0/14 hostPrefix=23
+service 172.30.0.0/16
+mtu 1400
+```
+
+```text
+$ oc get infrastructure cluster -o jsonpath='{.status.platformStatus.baremetal.machineNetworks}{"\n"}{.status.platformStatus.baremetal.apiServerInternalIPs}{"\n"}{.status.platformStatus.baremetal.ingressIPs}{"\n"}'
+[198.18.0.0/16]
+[198.18.0.3]
+[198.18.0.4]
+```
+
+**Per-node default pod subnets** (`k8s.ovn.org/node-subnets`) at the time of export (abbreviated: three sample rows, then **…**; use the **`oc get nodes -o jsonpath=…`** listing from **Per-node pod subnet** above for the full map):
+
+| Node | Pod `/23` |
+| ---- | --------- |
+| d21-h32-000-r650 | 10.128.0.0/23 |
+| d22-h14-000-r650 | 10.128.2.0/23 |
+| d23-h25-000-r650 | 10.128.4.0/23 |
+| … | … |
+
+Example **node InternalIP** on the machine network (each worker has a **198.18.0.x** on **`br-ex` / host**; exact **x** varies by node): `d22-h03-000-r650` → **198.18.0.10** at capture time.
+
+#### Example: pod IP versus ClusterIP (ovn-tracing)
+
+The same **`oc`** objects show **three different “kinds” of IPv4** side by side: **ClusterIP** (Service), **pod IP** (cluster network), and (in **`NODE`**) which **worker** hosts the pod on the **machine** network.
+
+```bash
+oc get svc,pod -n ovn-tracing -o wide
+```
+
+Example output from this lab:
+
+```text
+NAME                    TYPE        CLUSTER-IP       EXTERNAL-IP   PORT(S)    AGE    SELECTOR
+service/static-server   ClusterIP   172.30.140.184   <none>        8080/TCP   139m   app=static-server
+
+NAME                                 READY   STATUS    RESTARTS   AGE   IP            NODE               NOMINATED NODE   READINESS GATES
+pod/nettools-dual-pod                2/2     Running   0          56s   10.129.6.13   d22-h05-000-r650   <none>           <none>
+pod/static-server-79d7d9bbd4-jqpfm   1/1     Running   0          61m   10.131.0.58   d22-h06-000-r650   <none>           <none>
+```
+
+| Address / column | Range (this cluster) | What it is |
+| ---------------- | -------------------- | ---------- |
+| **`CLUSTER-IP` `172.30.140.184`** | **`172.30.0.0/16`** (`serviceNetwork`) | **Virtual Service front end.** Not attached to a pod interface. kube-proxy / OVN implements reachability to backend pod(s). Traffic **to the Service** uses this IP (here port **8080/TCP**). |
+| **`IP` (each pod row)** | **`10.128.0.0/14`** (`clusterNetwork`) | **Real pod address** on the default overlay — **pod network** / **cluster network**: the address on that pod’s **`eth0`**. Here **`10.129.6.13`** (`nettools-dual-pod`) and **`10.131.0.58`** (`static-server-…`) are both inside **`10.128.0.0/14`** but on **different** nodes. |
+| **`NODE` (each pod row)** | (host on **machine** network, e.g. **198.18.0.0/16** here) | **Which worker** runs that pod (`d22-h05-000-r650` vs `d22-h06-000-r650`); each host’s own IP is on the **underlay**, not in **`clusterNetwork`** or **`serviceNetwork`**. |
+
+**Takeaway:** **`172.30.140.184`** ∈ **Service CIDR**; both pod **IP**s ∈ **pod CIDR**. Curling the **Service** from another pod uses **`172.30.140.184:8080`**; **`curl` to a specific pod** uses that pod’s **IP** (e.g. **`10.131.0.58:8080`** for `static-server`, or **`10.129.6.13`** for tools on `nettools-dual-pod`). Replica **names** change when workloads are recreated; the **Service** name **`static-server`** is stable.
 
 ### Container-to-Container Communication
 
@@ -1159,3 +1338,4 @@ Chassis "eb9192d1-6f44-4ffe-a26e-d8ec52af6fbc"
 1. [Linux interfaces](https://developers.redhat.com/blog/2018/10/22/introduction-to-linux-interfaces-for-virtual-networking)
 2. [Open vSwitch](https://docs.openvswitch.org/en/latest/intro/what-is-ovs/)
 3. [OVN-Kubernetes architecture](https://docs.redhat.com/en/documentation/openshift_container_platform/4.21/html/ovn-kubernetes_network_plugin/ovn-kubernetes-architecture-assembly)
+4. [Configuring the cluster network range (OCP 4.20)](https://docs.redhat.com/en/documentation/openshift_container_platform/4.20/html/configuring_network_settings/configuring-cluster-network-range)

@@ -5,7 +5,7 @@ metadata:
   namespace: openshift-kube-descheduler-operator
 spec:
   profileCustomizations:
-    devDeviationThresholds: AsymmetricMedium
+    devDeviationThresholds: AsymmetricLow
   evictionLimits:
     total: 50
     node: 10
