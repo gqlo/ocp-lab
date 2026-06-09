@@ -1,0 +1,45 @@
+# Step 5: VirtualMachine with pod network + br-ex localnet interface
+# Source: https://blog.epheo.eu/articles/openshift-localnet/index.html
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: fedora-vm
+spec:
+  runStrategy: Always
+  template:
+    spec:
+      domain:
+        devices:
+          disks:
+          - name: rootdisk
+            disk:
+              bus: virtio
+          - name: cloudinitdisk
+            disk:
+              bus: virtio
+          interfaces:
+          - name: default
+            masquerade: {}
+          - name: br-ex-interface
+            bridge: {}
+        resources:
+          requests:
+            memory: 2Gi
+      networks:
+      - name: default
+        pod: {}
+      - name: br-ex-interface
+        multus:
+          networkName: default/br-ex-network
+      volumes:
+      - name: rootdisk
+        containerDisk:
+          image: quay.io/containerdisks/fedora:latest
+      - name: cloudinitdisk
+        cloudInitNoCloud:
+          userData: |-
+            #cloud-config
+            user: fedora
+            password: fedora
+            ssh_pwauth: true
+            chpasswd: { expire: False }

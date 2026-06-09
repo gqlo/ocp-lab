@@ -16,18 +16,26 @@
     - [How many IP addresses are in a /14?](#how-many-ip-addresses-are-in-a-14)
     - [This lab cluster (reference snapshot)](#this-lab-cluster-reference-snapshot)
     - [Example: pod IP versus ClusterIP (ovn-tracing)](#example-pod-ip-versus-clusterip-ovn-tracing)
+  - [CoreDNS in the Cluster](#coredns-in-the-cluster)
+    - [OpenShift DNS components](#openshift-dns-components)
+    - [What pods see: /etc/resolv.conf](#what-pods-see-etcresolvconf)
+    - [CoreDNS Corefile](#coredns-corefile)
+    - [In-cluster vs external resolution](#in-cluster-vs-external-resolution)
+    - [External DNS upstream chain (ScaleLab RDU2)](#external-dns-upstream-chain-scalelab-rdu2)
+    - [Tracing a DNS query from a pod](#tracing-a-dns-query-from-a-pod)
+    - [Summary](#summary)
   - [Container-to-Container Communication](#container-to-container-communication)
     - [Shared Network Namespace](#shared-network-namespace)
     - [Process Isolation](#process-isolation)
     - [Filesystem Isolation](#filesystem-isolation)
     - [Connection Tracking with conntrack](#connection-tracking-with-conntrack)
     - [Packet Capture with tcpdump](#packet-capture-with-tcpdump)
-    - [Summary](#summary)
+    - [Summary](#summary-1)
   - [Understanding the Node Network Stack](#understanding-the-node-network-stack)
     - [OVS Topology on a Physical Node](#ovs-topology-on-a-physical-node)
     - [Container, Veth Pair, and Physical NIC](#container-veth-pair-and-physical-nic)
     - [Comparing Capture Points: veth, eth0, and Physical NIC](#comparing-capture-points-veth-eth0-and-physical-nic)
-    - [Summary](#summary-1)
+    - [Summary](#summary-2)
   - [Tracing a Packet from Pod to the Internet](#tracing-a-packet-from-pod-to-the-internet)
     - [Packet Path Overview](#packet-path-overview)
     - [Prerequisites](#prerequisites)
@@ -38,7 +46,7 @@
     - [Step 5: Verify with conntrack on the Node](#step-5-verify-with-conntrack-on-the-node)
     - [Step 6: Confirm the OVN SNAT Rule](#step-6-confirm-the-ovn-snat-rule)
     - [Step 7: Capture at the Bastion Host (Second SNAT)](#step-7-capture-at-the-bastion-host-second-snat)
-    - [Summary](#summary-2)
+    - [Summary](#summary-3)
   - [Tracing a Packet from Pod to Pod (different node)](#tracing-a-packet-from-pod-to-pod-different-node)
     - [Step 1: Confirm pods on different nodes](#step-1-confirm-pods-on-different-nodes)
     - [Step 2: Describe ovnkube-node (what runs on the node)](#step-2-describe-ovnkube-node-what-runs-on-the-node)
@@ -291,6 +299,402 @@ pod/static-server-79d7d9bbd4-jqpfm   1/1     Running   0          61m   10.131.0
 | **`NODE` (each pod row)** | (host on **machine** network, e.g. **198.18.0.0/16** here) | **Which worker** runs that pod (`d22-h05-000-r650` vs `d22-h06-000-r650`); each host’s own IP is on the **underlay**, not in **`clusterNetwork`** or **`serviceNetwork`**. |
 
 **Takeaway:** **`172.30.140.184`** ∈ **Service CIDR**; both pod **IP**s ∈ **pod CIDR**. Curling the **Service** from another pod uses **`172.30.140.184:8080`**; **`curl` to a specific pod** uses that pod’s **IP** (e.g. **`10.131.0.58:8080`** for `static-server`, or **`10.129.6.13`** for tools on `nettools-dual-pod`). Replica **names** change when workloads are recreated; the **Service** name **`static-server`** is stable.
+
+### CoreDNS in the Cluster
+
+Pods reach each other by **IP** or by **DNS name**, but they never hardcode the cluster DNS address. The **kubelet** injects **`/etc/resolv.conf`** into every pod, pointing at a **ClusterIP Service** that fronts **CoreDNS**. On OpenShift, the **Cluster DNS Operator** deploys CoreDNS as a **DaemonSet** (one DNS pod per node) and publishes that Service IP cluster-wide.
+
+Understanding DNS matters for network tracing: a **`curl static-server`** from one pod to another is really **UDP/TCP port 53 to `172.30.0.10`**, then (for in-cluster names) an answer from CoreDNS’s **`kubernetes`** plugin—not a direct connection to the target pod until the application opens a second socket to the returned ClusterIP.
+
+#### OpenShift DNS components
+
+OpenShift splits DNS configuration across a **cluster config**, an **operator**, and the **`openshift-dns`** namespace workloads.
+
+**Operator and cluster config:**
+
+```bash
+oc get dns.operator/default -o yaml
+oc get dns.config/cluster -o yaml
+```
+
+Example **`status`** from this lab ( **`dns.operator/default`** ):
+
+```yaml
+status:
+  clusterDomain: cluster.local
+  clusterIP: 172.30.0.10
+```
+
+Example **`spec`** from **`dns.config/cluster`**:
+
+```yaml
+spec:
+  baseDomain: mno.example.com
+```
+
+| Component | This lab cluster |
+| --------- | ---------------- |
+| **Cluster domain** | **`cluster.local`** |
+| **Base domain** | **`mno.example.com`** |
+| **DNS Service ClusterIP** | **`172.30.0.10`** |
+| **Namespace** | **`openshift-dns`** |
+| **Workloads** | **`dns-default`** DaemonSet (**15** pods, **2/2**), **`node-resolver`** DaemonSet (**15** pods) |
+
+**Data plane objects** (what actually answers queries):
+
+```bash
+oc get svc,pods,daemonset -n openshift-dns -o wide
+```
+
+| Object | Role |
+| ------ | ---- |
+| **`dns-default` Service** | **ClusterIP `172.30.0.10`**, ports **53/UDP** and **53/TCP** (plus **9154/TCP** for metrics). This is the address every pod’s **`nameserver`** line uses. |
+| **`dns-default` DaemonSet** | One pod **per node**. Containers: **`dns`** (CoreDNS, listens on **5353** inside the pod) and **`kube-rbac-proxy`** (TLS front-end for Prometheus metrics on **9154**). The Service maps **53 → 5353** on the backend pods. |
+| **`node-resolver` DaemonSet** | Separate from pod DNS. Periodically queries cluster DNS and writes selected platform hostnames into **each node’s `/etc/hosts`**. Do not confuse this with how **pods** resolve names—they always use **`172.30.0.10`**, not the node’s **`/etc/hosts`**. |
+
+```
+  Pod application
+        |
+        | reads /etc/resolv.conf
+        v
+  nameserver 172.30.0.10  (dns-default Service ClusterIP)
+        |
+        | OVN Service load-balancing
+        v
+  dns-default pod on some node (CoreDNS :5353)
+        |
+        +-- *.cluster.local  --> kubernetes plugin (API watch)
+        |
+        +-- everything else  --> forward to node upstream DNS
+                                      (see [External DNS upstream chain](#external-dns-upstream-chain-scalelab-rdu2))
+```
+
+#### What pods see: `/etc/resolv.conf`
+
+The kubelet builds **`/etc/resolv.conf`** from the cluster DNS Service IP, the cluster/base domains, and the pod’s namespace. Every pod in the same namespace gets the same **`search`** list; only the pod IP differs.
+
+```bash
+oc exec -n ovn-tracing deploy/static-server -- cat /etc/resolv.conf
+```
+
+Example output from this lab:
+
+```text
+search ovn-tracing.svc.cluster.local svc.cluster.local cluster.local mno.example.com
+nameserver 172.30.0.10
+options ndots:5
+```
+
+| Line | Meaning |
+| ---- | ------- |
+| **`nameserver 172.30.0.10`** | Always the **`dns-default` Service ClusterIP**—never a CoreDNS pod IP. |
+| **`search …`** | Suffixes tried for **short** names. Namespace-scoped **`ovn-tracing.svc.cluster.local`** comes first, then **`svc.cluster.local`**, **`cluster.local`**, and the OpenShift **`baseDomain`**. |
+| **`options ndots:5`** | Names with **fewer than 5 dots** are expanded through the **`search`** list before being queried as a fully qualified name. A short name like **`static-server`** becomes **`static-server.ovn-tracing.svc.cluster.local`**, then **`static-server.svc.cluster.local`**, and so on. |
+
+**Note:** **`172.30.0.10`** lives in **`serviceNetwork`** (**`172.30.0.0/16`**)—the same range as **`static-server`**’s ClusterIP **`172.30.140.184`**. DNS is itself a Kubernetes Service; tracing DNS traffic is tracing **Service** reachability.
+
+#### CoreDNS Corefile
+
+The operator renders CoreDNS configuration into ConfigMap **`dns-default`** in **`openshift-dns`**:
+
+```bash
+oc get configmap dns-default -n openshift-dns -o yaml
+```
+
+Corefile from this lab:
+
+```text
+.:5353 {
+    bufsize 1232
+    errors
+    log . {
+        class error
+    }
+    health {
+        lameduck 20s
+    }
+    ready
+    kubernetes cluster.local in-addr.arpa ip6.arpa {
+        pods insecure
+        fallthrough in-addr.arpa ip6.arpa
+    }
+    prometheus 127.0.0.1:9153
+    forward . /etc/resolv.conf {
+        policy sequential
+    }
+    cache 900 {
+        denial 9984 30
+    }
+    reload
+}
+hostname.bind:5353 {
+    chaos
+}
+```
+
+| Plugin / block | Role |
+| -------------- | ---- |
+| **`kubernetes cluster.local …`** | Answers **in-cluster** names (Services, and Pod A records with **`pods insecure`**) by watching the Kubernetes API. |
+| **`forward . /etc/resolv.conf`** | Sends **non-cluster** queries to the **node’s upstream resolvers**. Inside the DNS pod, **`/etc/resolv.conf`** is copied from the **host node**—not **`172.30.0.10`** (which would loop). Upstream IPs are **lab-specific**; see [External DNS upstream chain (ScaleLab RDU2)](#external-dns-upstream-chain-scalelab-rdu2). |
+| **`cache 900`** | Caches successful responses for up to **900** seconds. |
+| **`health` / `ready`** | HTTP probes on **8080** / **8181** for liveness and readiness. |
+| **`prometheus`** | Exposes metrics on **127.0.0.1:9153**; **`kube-rbac-proxy`** publishes them on Service port **9154**. |
+
+#### Listening ports inside a `dns-default` pod
+
+Inside the **`dns`** container, CoreDNS binds the ports configured in the Corefile. From a shell in any **`dns-default`** pod:
+
+```bash
+oc rsh -n openshift-dns dns-default-526b4
+# Defaulted container "dns" out of: dns, kube-rbac-proxy
+ss -tupln
+```
+
+Example output from this lab:
+
+```text
+Netid       State        Recv-Q       Send-Q             Local Address:Port               Peer Address:Port       Process
+udp         UNCONN       0            0                              *:5353                          *:*           users:(("coredns",pid=1,fd=9))
+tcp         LISTEN       0            0                      127.0.0.1:9153                    0.0.0.0:*           users:(("coredns",pid=1,fd=7))
+tcp         LISTEN       0            0                              *:8080                          *:*           users:(("coredns",pid=1,fd=6))
+tcp         LISTEN       0            0                              *:8181                          *:*           users:(("coredns",pid=1,fd=3))
+tcp         LISTEN       0            0                              *:5353                          *:*           users:(("coredns",pid=1,fd=8))
+tcp         LISTEN       0            0                              *:9154
+```
+
+| Port | Process | Role |
+| ---- | ------- | ---- |
+| **5353/UDP, 5353/TCP** | CoreDNS | DNS inside the pod; the **`dns-default` Service** maps cluster port **53 → 5353**. |
+| **8080/TCP** | CoreDNS | **`health`** plugin (liveness). |
+| **8181/TCP** | CoreDNS | **`ready`** plugin (readiness). |
+| **9153/TCP** (`127.0.0.1`) | CoreDNS | **`prometheus`** metrics (localhost only). |
+| **9154/TCP** | **`kube-rbac-proxy`** | TLS front-end; Service port **9154** for Prometheus scraping. |
+
+All containers in the pod share the network namespace, so **`ss`** inside the **`dns`** container also shows listeners from the **`kube-rbac-proxy`** sidecar.
+
+#### In-cluster vs external resolution
+
+Two query paths share the same first hop (**pod → `172.30.0.10:53`**) but diverge inside CoreDNS.
+
+**1. In-cluster Service name**
+
+```bash
+oc exec -n ovn-tracing nettools-dual-pod -c nettools-container-2 -- \
+    dig +short static-server.ovn-tracing.svc.cluster.local @172.30.0.10
+```
+
+Example output:
+
+```text
+172.30.140.184
+```
+
+CoreDNS **`kubernetes`** plugin returns the **`static-server` Service ClusterIP**—the same **`172.30.140.184`** from [Example: pod IP versus ClusterIP (ovn-tracing)](#example-pod-ip-versus-clusterip-ovn-tracing). The application then opens a **separate** TCP connection to that IP (port **8080** for HTTP).
+
+**2. External name**
+
+```bash
+oc exec -n ovn-tracing nettools-dual-pod -c nettools-container-2 -- \
+    dig +short google.com @172.30.0.10
+```
+
+Example output (truncated):
+
+```text
+142.251.163.113
+142.251.163.138
+142.251.163.101
+```
+
+CoreDNS **`forward`** sends the query to the **node’s upstream resolvers** (see [External DNS upstream chain (ScaleLab RDU2)](#external-dns-upstream-chain-scalelab-rdu2)). Reply traffic follows the normal node egress path described in [Tracing a Packet from Pod to the Internet](#tracing-a-packet-from-pod-to-the-internet).
+
+**3. Platform Service (default namespace)**
+
+```bash
+oc exec -n ovn-tracing nettools-dual-pod -c nettools-container-2 -- \
+    dig +short kubernetes.default.svc.cluster.local @172.30.0.10
+```
+
+Example output:
+
+```text
+172.30.0.1
+```
+
+That is the **`kubernetes` Service ClusterIP**—the API server front end inside the cluster.
+
+| Query | CoreDNS plugin | Answer type |
+| ----- | -------------- | ----------- |
+| **`*.svc.cluster.local`** | **`kubernetes`** | Service **ClusterIP** (virtual) |
+| **External FQDN** (e.g. **`google.com`**) | **`forward`** | Public IPs via node DNS |
+| **Pod name** (with **`pods insecure`**) | **`kubernetes`** | Pod IP on overlay |
+
+#### External DNS upstream chain (ScaleLab RDU2)
+
+For **external** names, CoreDNS does not answer from its cache or the Kubernetes API—it **forwards** the query using the **`forward . /etc/resolv.conf`** plugin. That **`/etc/resolv.conf`** inside each **`dns-default`** pod is inherited from the **worker node** that hosts the pod. On **ScaleLab RDU2** (Jetlag-deployed bare metal), the chain continues through a **per-node resolver** and then the **bastion dnsmasq**, before reaching Red Hat / Internet DNS.
+
+```
+  Pod application
+        |
+        | UDP/TCP :53
+        v
+  172.30.0.10  (dns-default Service ClusterIP)
+        |
+        | OVN Service load-balancing → local dns-default pod on the node
+        v
+  CoreDNS forward . /etc/resolv.conf
+        |
+        | reads dns-default pod /etc/resolv.conf (copied from the node)
+        v
+  10.1.48.10  (this node’s resolver — per-node dnsmasq on the provisioning network)
+        |
+        | often forwards unresolved names upstream
+        v
+  10.1.48.1  (bastion host dnsmasq — cluster-side gateway on 10.1.48.0/24)
+        |
+        | reads bastion /etc/resolv.conf
+        v
+  10.1.89.24, 10.1.36.1, 10.1.36.2  (Red Hat / lab upstream DNS)
+        |
+        v
+  Internet (e.g. google.com, cdn.redhat.com)
+```
+
+| Hop | Address | Role |
+| --- | ------- | ---- |
+| **Pod → CoreDNS** | **`172.30.0.10:53`** | **`dns-default` Service ClusterIP**—same for every pod. |
+| **CoreDNS → node resolver** | **`10.1.48.10`** (example; varies by node) | Per-node upstream listed in the **worker node’s** **`/etc/resolv.conf`**, mounted into the **`dns-default`** pod. Other nodes may use **`10.1.48.25`**, etc. |
+| **Node resolver → bastion** | **`10.1.48.1`** | **dnsmasq** on the bastion (**`d20-h07-000-r650`** in RDU2); default gateway / DNS relay for the **`10.1.48.0/24`** provisioning network. |
+| **Bastion → corporate DNS** | **`10.1.89.24`**, **`10.1.36.1`**, **`10.1.36.2`** | Upstream resolvers on the bastion’s external-facing network. |
+| **Corporate DNS → Internet** | (public resolvers) | Answers for public FQDNs; Red Hat CDN and registry names resolve here too. |
+
+**Verify each layer**
+
+On a **worker node** (replace with the node that runs your test pod):
+
+```bash
+ssh core@d22-h15-000-r650
+cat /etc/resolv.conf
+```
+
+Inside the **local `dns-default` pod** on that worker (CoreDNS uses this file for **`forward`**):
+
+```bash
+NODE=d22-h15-000-r650
+DNS_POD=$(oc get pods -n openshift-dns -l dns.operator.openshift.io/daemonset-dns=default \
+    --field-selector spec.nodeName=$NODE -o jsonpath='{.items[0].metadata.name}')
+oc exec -n openshift-dns "$DNS_POD" -c dns -- cat /etc/resolv.conf
+```
+
+On the **bastion** host (**`d20-h07-000-r650`** — Jetlag automation deploys upstream resolvers here):
+
+```bash
+cat /etc/resolv.conf
+```
+
+Example from bastion **`d20-h07-000-r650`** in RDU2 ScaleLab:
+
+```text
+# Deployed by Jetlag automation
+search rdu2.scalelab.redhat.com
+nameserver 10.1.89.24
+nameserver 10.1.36.1
+nameserver 10.1.36.2
+```
+
+**Tracing tips**
+
+- From a **client pod**, **`tcpdump -i eth0 'udp port 53'`** shows only **`pod IP ↔ 172.30.0.10`**—the upstream hops are invisible at the pod interface.
+- From inside a **`dns-default`** pod, capture **`udp port 53 or port 5353`** on **`eth0`** to see **CoreDNS → `10.1.48.x:53`** on a cache miss (see also [epbf-lab.md](../../ebpf/epbf-lab.md)).
+- DNS queries are **UDP/53** (sometimes **TCP/53** for large responses); they follow the same **node egress / bastion SNAT** path as other traffic once they leave the cluster overlay—see [Tracing a Packet from Pod to the Internet](#tracing-a-packet-from-pod-to-the-internet).
+
+**Note:** Other lab snapshots in this guide (for example clusters on **`198.18.0.0/16`**) use different upstream IPs, but the **pattern** is the same: **pod → CoreDNS Service → node resolvers → bastion / lab DNS → Internet**.
+
+#### Tracing a DNS query from a pod
+
+This exercise shows what DNS looks like on the wire at the pod interface—the same capture style as [Packet Capture with tcpdump](#packet-capture-with-tcpdump).
+
+**Prerequisites:** A pod with **`tcpdump`** and **`dig`**. Deploy **`nettools-dual-pod`** from [`dual-container.yaml`](dual-container.yaml) if needed:
+
+```bash
+oc apply -f dual-container.yaml -n ovn-tracing
+oc wait -n ovn-tracing pod/nettools-dual-pod --for=condition=Ready --timeout=120s
+```
+
+**Step 1: Confirm the DNS target**
+
+```bash
+oc exec -n ovn-tracing nettools-dual-pod -c nettools-container-2 -- cat /etc/resolv.conf
+```
+
+**Step 2: Capture at pod `eth0`**
+
+Start a capture in one terminal:
+
+```bash
+oc exec -n ovn-tracing nettools-dual-pod -c nettools-container-2 -- \
+    tcpdump -i eth0 -nn 'udp port 53'
+```
+
+Issue a query from another terminal:
+
+```bash
+oc exec -n ovn-tracing nettools-dual-pod -c nettools-container-2 -- \
+    dig +short static-server.ovn-tracing.svc.cluster.local
+```
+
+Example capture from this lab (client pod **`10.130.4.248`** on **`d22-h15-000-r650`**):
+
+```text
+18:28:31.397617 IP 10.130.4.248.57374 > 172.30.0.10.53: 50576+ [1au] A? static-server.ovn-tracing.svc.cluster.local. (84)
+18:28:31.399397 IP 172.30.0.10.53 > 10.130.4.248.57374: 50576*- 1/0/1 A 172.30.140.184 (143)
+```
+
+**Observations:**
+
+- The query goes to **`172.30.0.10:53`** (the **Service ClusterIP**), not to a CoreDNS pod IP such as **`10.130.4.5`**. OVN implements Service load-balancing and selects a backend **`dns-default`** pod.
+- The answer is **`172.30.140.184`**—another **ClusterIP**, not the backend pod’s overlay address.
+
+**Step 3: Compare in-cluster vs forwarded query**
+
+Repeat the capture while querying an external name:
+
+```bash
+oc exec -n ovn-tracing nettools-dual-pod -c nettools-container-2 -- dig +short google.com
+```
+
+Example capture lines:
+
+```text
+18:28:30.742195 IP 10.130.4.248.54124 > 172.30.0.10.53: 2213+ [1au] A? google.com. (51)
+18:28:30.746315 IP 172.30.0.10.53 > 10.130.4.248.54124: 2213 6/0/1 A 142.251.163.113, A 142.251.163.138, ...
+```
+
+From the pod’s perspective the path is identical (**`pod IP → 172.30.0.10:53`**). Inside CoreDNS, an external name triggers **`forward`** to node DNS; the reply still returns from **`172.30.0.10`**.
+
+**Step 4 (optional): Identify the local CoreDNS pod**
+
+To see which **`dns-default`** pod serves your node (useful for logs, not required for pod-level tracing):
+
+```bash
+NODE=$(oc get pod -n ovn-tracing nettools-dual-pod -o jsonpath='{.spec.nodeName}')
+oc get pods -n openshift-dns -l dns.operator.openshift.io/daemonset-dns=default \
+    --field-selector spec.nodeName=$NODE -o wide
+```
+
+Example: client on **`d22-h15-000-r650`** → local DNS pod **`dns-default-5mp7r`**. The minimal CoreDNS image does not ship **`tcpdump`**; use **`oc logs -n openshift-dns <dns-pod> -c dns`** for error-level query logging configured in the Corefile.
+
+| Query type | Destination from pod | CoreDNS action |
+| ---------- | -------------------- | -------------- |
+| **`*.svc.cluster.local`** | **`172.30.0.10:53`** | **`kubernetes`** plugin (no upstream forward) |
+| **External FQDN** | **`172.30.0.10:53`** | **`forward`** to node upstream DNS (e.g. **`10.1.48.10`** → **`10.1.48.1`** on ScaleLab RDU2) |
+
+#### Summary
+
+- Every pod uses **`nameserver 172.30.0.10`**—the **`dns-default` Service ClusterIP** in **`serviceNetwork`**, not a pod IP.
+- CoreDNS runs as a **DaemonSet** (**one pod per node**); clients reach it through **Service** load-balancing, so **`tcpdump` on `eth0`** shows **`172.30.0.10`**, not the backend CoreDNS pod address.
+- **In-cluster** names are answered by the **`kubernetes`** plugin (returns **ClusterIPs** or pod IPs); **external** names are **forwarded** through the node’s upstream resolvers and (on ScaleLab RDU2) the **bastion dnsmasq**—see [External DNS upstream chain (ScaleLab RDU2)](#external-dns-upstream-chain-scalelab-rdu2).
+- DNS is a **two-step** pattern for Services: first query returns a **ClusterIP**, then the application connects to that virtual IP for the actual workload traffic.
 
 ### Container-to-Container Communication
 
@@ -1339,3 +1743,5 @@ Chassis "eb9192d1-6f44-4ffe-a26e-d8ec52af6fbc"
 2. [Open vSwitch](https://docs.openvswitch.org/en/latest/intro/what-is-ovs/)
 3. [OVN-Kubernetes architecture](https://docs.redhat.com/en/documentation/openshift_container_platform/4.21/html/ovn-kubernetes_network_plugin/ovn-kubernetes-architecture-assembly)
 4. [Configuring the cluster network range (OCP 4.20)](https://docs.redhat.com/en/documentation/openshift_container_platform/4.20/html/configuring_network_settings/configuring-cluster-network-range)
+5. [OpenShift: Configuring DNS](https://docs.redhat.com/en/documentation/openshift_container_platform/latest/html/networking/configuring-dns)
+6. [CoreDNS kubernetes plugin](https://coredns.io/plugins/kubernetes/)

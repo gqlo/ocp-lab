@@ -1,0 +1,15 @@
+# Step 2: NodeNetworkConfigurationPolicy — map localnet to br-ex bridge
+# Source: https://blog.epheo.eu/articles/openshift-localnet/index.html
+apiVersion: nmstate.io/v1
+kind: NodeNetworkConfigurationPolicy
+metadata:
+  name: br-ex-network
+spec:
+  nodeSelector:
+    node-role.kubernetes.io/worker: ''
+  desiredState:
+    ovn:
+      bridge-mappings:
+      - localnet: br-ex-network
+        bridge: br-ex
+        state: present
