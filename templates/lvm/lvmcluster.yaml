@@ -2,22 +2,22 @@ apiVersion: lvm.topolvm.io/v1alpha1
 kind: LVMCluster
 metadata:
   name: nvme-lvmcluster
-  namespace: openshift-storage
+  namespace: openshift-lvm-storage
 spec:
   storage:
     deviceClasses:
-    - name: vg-nvme
+    - name: promethues-vg
       deviceSelector:
         paths:
-        - /dev/disk/by-path/pci-0000:86:00.0-nvme-1
-      thinPoolConfig:
-        name: nvme-thin-pool
-        sizePercent: 90
-        overprovisionRatio: 10
+        - /dev/disk/by-path/pci-0000:31:00.0-nvme-1
+        - /dev/disk/by-path/pci-0000:32:00.0-nvme-1
+        - /dev/disk/by-path/pci-0000:65:00.0-nvme-1
+        - /dev/disk/by-path/pci-0000:66:00.0-nvme-1
       nodeSelector:
         nodeSelectorTerms:
         - matchExpressions:
           - key: kubernetes.io/hostname
             operator: In
             values:
-            - f09-h04-000-1029u
+            - d30-h07-000-r750
+            - d28-h09-000-r750

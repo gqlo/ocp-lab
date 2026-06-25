@@ -6,14 +6,23 @@ metadata:
 data:
   config.yaml: |
     prometheusK8s:
-      retention: 36w
-      nodeSelector:
-        nodePool: promdb
+      retention: 15d
       volumeClaimTemplate:
         metadata:
           name: prometheusdb
         spec:
-          storageClassName: promdb-local-sc
+          storageClassName: lvms-promethues-vg
+          volumeMode: Filesystem
           resources:
             requests:
-              storage: 894Gi
+              storage: 4096Gi
+    alertmanagerMain:
+      volumeClaimTemplate:
+        metadata:
+          name: alertmanager
+        spec:
+          storageClassName: lvms-promethues-vg
+          volumeMode: Filesystem
+          resources:
+            requests:
+              storage: 1024Gi
