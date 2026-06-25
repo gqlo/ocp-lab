@@ -42,6 +42,11 @@ RUN dnf install -y \
     traceroute \
     telnet \
     nc \
+    # SSH
+    openssh-clients \
+    openssh-server \
+    && ssh-keygen -A \
+    && mkdir -p /run/sshd \
     && dnf clean all
 
 # Set bash as default shell

@@ -17,6 +17,8 @@ Operational tweaks and queries for the CNV high-scale / ODF test cluster. See al
   - [OSD CPU and memory](#osd-cpu-and-memory)
   - [Ceph block pool PG tuning](#ceph-block-pool-pg-tuning)
   - [ODF alerts](#odf-alerts)
+- [Worker KubeletConfig](#worker-kubeletconfig)
+  - [highscale (`maxPods`)](#highscale-maxpods)
 - [Kube Descheduler & CNV](#kube-descheduler--cnv)
   - [Descheduler eviction limits](#descheduler-eviction-limits)
   - [CNV live migration limits (HCO)](#cnv-live-migration-limits-hco)
@@ -173,33 +175,27 @@ and revert manual patches on upgrade.
 
 ### OSD CPU and memory
 
-Preferred: patch the **StorageCluster** so the OCS operator rolls OSD pods with new
-limits. Adjust CPU/memory to match node capacity and load.
+Patch **`spec.storageDeviceSets[0].resources`** on the StorageCluster. The OCS operator
+propagates this to the CephCluster device sets, which Rook uses for OSD pod limits.
+(`spec.resources.osd` alone does not update running OSD pods on ODF 4.21.)
 
 ```bash
-# Current OSD resource settings
-oc get storagecluster ocs-storagecluster -n openshift-storage \
-  -o jsonpath='{.spec.resources.osd}{"\n"}' | jq .
+# High-scale bump (edit limits/requests as needed)
+oc patch storagecluster ocs-storagecluster -n openshift-storage --type=json -p \
+  '[{"op":"replace","path":"/spec/storageDeviceSets/0/resources","value":{"requests":{"cpu":"5","memory":"24Gi"},"limits":{"cpu":"5","memory":"24Gi"}}}]'
 
-# Example high-scale bump (edit limits/requests as needed)
-oc patch storagecluster ocs-storagecluster -n openshift-storage --type=merge -p '
-{
-  "spec": {
-    "resources": {
-      "osd": {
-        "limits": {
-          "cpu": "5",
-          "memory": "24Gi"
-        },
-        "requests": {
-          "cpu": "4",
-          "memory": "16Gi"
-        }
-      }
-    }
-  }
-}'
+# Verify StorageCluster → CephCluster → OSD pods
+oc get storagecluster ocs-storagecluster -n openshift-storage \
+  -o jsonpath='{.spec.storageDeviceSets[0].resources}{"\n"}' | jq .
+
+oc get cephcluster ocs-storagecluster-cephcluster -n openshift-storage \
+  -o jsonpath='{range .spec.storage.storageClassDeviceSets[*]}{.name}{": "}{.resources}{"\n"}{end}'
+
+oc get pod -n openshift-storage -l app=rook-ceph-osd \
+  -o custom-columns=NAME:.metadata.name,CPU:.spec.containers[0].resources.requests.cpu,MEM:.spec.containers[0].resources.requests.memory | head
 ```
+
+OSD Deployments roll after CephCluster updates; existing pods keep old limits until recreated.
 
 ### Ceph block pool PG tuning
 
@@ -272,6 +268,57 @@ oc exec -n openshift-storage deploy/rook-ceph-tools -- \
 | `ocs-metrics-exporter` OOMKilled | Patch deployment memory to 512M (see above) |
 | Ceph slow / `PausedIOError` on VMs | Check `ceph status`, OSD pods on affected node |
 | PG backfill after `pg_num` change | Normal during rebalance; watch `ceph -s` until `active+clean` |
+
+---
+
+## Worker KubeletConfig
+
+Worker nodes use a **KubeletConfig** CR so the Machine Config Operator (MCO) rolls kubelet
+settings into the worker `MachineConfigPool`. Default OpenShift `maxPods` is typically **250**;
+high-scale needs a much higher cap for dense VM/pod placement.
+
+### highscale (`maxPods`)
+
+Live CR (cluster-scoped, no namespace):
+
+```yaml
+apiVersion: machineconfiguration.openshift.io/v1
+kind: KubeletConfig
+metadata:
+  name: highscale
+spec:
+  kubeletConfig:
+    maxPods: 1000
+    nodeStatusMaxImages: -1
+  machineConfigPoolSelector:
+    matchLabels:
+      pools.operator.machineconfiguration.openshift.io/worker: ""
+```
+
+| Field | Value | Role |
+|-------|-------|------|
+| `maxPods` | `1000` | Upper bound on schedulable pods per worker node |
+| `nodeStatusMaxImages` | `-1` | No cap on images reported in node status (avoids trimming image list on image-heavy nodes) |
+| `machineConfigPoolSelector` | worker pool label | Applies only to workers, not masters |
+
+`status.conditions` type **Success** = MCO generated and applied the worker MachineConfig.
+
+Inspect:
+
+```bash
+oc get kubeletconfig highscale -o yaml
+oc get mcp worker -o jsonpath='{.status.configuration.name}{"\n"}'
+```
+
+On a worker, confirm kubelet picked up the limit:
+
+```bash
+oc debug node/<worker> -- chroot /host grep maxPods /etc/kubernetes/kubelet.conf
+```
+
+**Note:** Raising `maxPods` requires sufficient pod network CIDR capacity, node CPU/memory, and
+often companion tuning (`systemReserved`, descheduler/CNV migration limits). See templates under
+`templates/kubelet/` for allocatable/reserved examples.
 
 ---
 
