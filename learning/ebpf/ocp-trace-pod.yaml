@@ -4,10 +4,10 @@
 # Apply:
 #   OCP_VER=$(oc get clusterversion version -o jsonpath='{.status.desired.version}')
 #   NODE=$(oc get nodes -l node-role.kubernetes.io/worker -o jsonpath='{.items[0].metadata.name}')
-#   sed "s/OCP_VERSION/${OCP_VER}/" ocp-trace-pod.yaml | oc apply -f -
-#   oc patch pod ocp-trace-node --type merge -p "{\"spec\":{\"nodeName\":\"$NODE\"}}"
+#   sed -e "s/OCP_VERSION/${OCP_VER}/" -e "s/NODE_NAME/${NODE}/" ocp-trace-pod.yaml | oc apply -f -
 #
 # Shell:
+#   oc rsh ocp-trace-node
 #   oc exec -it ocp-trace-node -- bash
 #
 apiVersion: v1
@@ -17,7 +17,7 @@ metadata:
   labels:
     app: ocp-trace
 spec:
-  # nodeName: f12-h16-000-r660
+  nodeName: NODE_NAME
   hostPID: true
   containers:
   - name: ocp-trace
