@@ -147,7 +147,7 @@ Upstream: [iovisor/bcc](https://github.com/iovisor/bcc).
 | Problem | Fix |
 | ------- | --- |
 | Wrong/missing kernel headers after upgrade | Rebuild and use new **version tag**, not an old one |
-| Build fails on Fedora | Build on subscribed **RHEL** |
+| `No package matches '…'` during `./build.sh` | Package not in RHEL 9 BaseOS/AppStream — remove from [`packages.txt`](packages.txt) (e.g. `iftop`, `htop`, `bridge-utils`) |
 | `unauthorized` on push | Login as Quay user with write access (not cluster robot) |
 | Debug exits immediately | Add **`-it`** to `oc debug` |
 
