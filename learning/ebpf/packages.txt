@@ -1,0 +1,49 @@
+# RHEL packages installed on top of Driver Toolkit (one per line; # comments ignored)
+# eBPF / tracing
+bpftrace
+bcc-tools
+bpftool
+perf
+strace
+ltrace
+blktrace
+# Network capture & analysis
+tcpdump
+wireshark-cli
+conntrack-tools
+# IP / DNS / routing
+iproute
+iputils
+bind-utils
+net-tools
+bridge-utils
+ethtool
+# Network testing
+curl
+wget
+nmap
+nmap-ncat
+iperf3
+socat
+traceroute
+telnet
+mtr
+# Process / system
+procps-ng
+psmisc
+sysstat
+lsof
+pciutils
+iftop
+iotop
+htop
+# Storage / disk
+gdisk
+hdparm
+smartmontools
+nvme-cli
+# Shell / utilities
+util-linux
+bash-completion
+vim
+less

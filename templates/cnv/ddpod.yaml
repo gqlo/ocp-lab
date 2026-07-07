@@ -1,3 +1,6 @@
+# Block I/O experiment pod — privileged, mounts /sys/kernel/debug and a PVC block device.
+# Image: ocp-trace:<OCP-version> (DTK + eBPF/network tools). Build: learning/ebpf/build.sh
+# Apply: sed "s/OCP_VERSION/$(oc get clusterversion version -o jsonpath='{.status.desired.version}')/" ddpod.yaml | oc apply -f -
 apiVersion: v1
 kind: Pod
 metadata:
@@ -5,7 +8,7 @@ metadata:
 spec:
   containers:
   - name: block-writer
-    image: quay.io/rh_ee_lguoqing/ebpf_94
+    image: quay.io/rh_ee_lguoqing/ocp-trace:OCP_VERSION
     command: ["/bin/sleep", "infinity"]
     securityContext:
       privileged: true

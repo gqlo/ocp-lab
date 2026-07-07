@@ -1,80 +1,91 @@
-# eBPF container image lab
+# ocp-trace
 
-Lab tooling for eBPF container images on OpenShift — build, push, and run debug toolboxes in pods.
+**ocp-trace** is a debug container image for OpenShift: Driver Toolkit (RHCOS-matched kernel headers) plus eBPF, network capture, and shell utilities. Use it for **`oc debug`** into pods **or** on nodes.
 
-| Image | Built from | Use for |
-| ----- | ---------- | ------- |
-| **`quay.io/rh_ee_lguoqing/toolbox:latest`** | [`Dockerfile`](Dockerfile) | `oc debug` into pods — `tcpdump`, `bpftrace`, `bcc-tools`, shell utilities |
-| **`quay.io/rh_ee_lguoqing/ebpf_<version>`** | [`build-ebpf.sh`](build-ebpf.sh) | Privileged pods needing **kernel headers matched to a worker node** (e.g. [`ddpod.yaml`](../../templates/cnv/ddpod.yaml)) |
+| Image | Built by | Use for |
+| ----- | -------- | ------- |
+| **`quay.io/rh_ee_lguoqing/ocp-trace:<OCP-version>`** | [`build.sh`](build.sh) | Pod debug (tcpdump, CoreDNS) **and** node eBPF (bcc, bpftrace, bio*) |
 
-**Why not `dnf install` on the node or pod?** Workload images are minimal, RHCOS nodes are immutable, and `oc debug` containers are ephemeral. Pre-build tools into an image and push to Quay. For **BCC/bpftrace**, kernel headers must match the worker kernel — that is what the kernel-matched UBI image is for.
+Example: `quay.io/rh_ee_lguoqing/ocp-trace:4.16.37` — tag matches `oc get clusterversion version`. [`build.sh`](build.sh) also tags `:latest` for convenience.
+
+**Why version tags?** The image is built on **Driver Toolkit**, which changes with each OCP release. Pin the tag to your cluster version so kernel headers stay matched after upgrades.
 
 ---
 
-## 1. Toolbox image — build and run
+## Build and push
 
-Most common path: attach a debug shell to a pod (CoreDNS, app pod, etc.).
-
-### Build
+**Requires:** subscribed **RHEL** build host, `oc` logged into cluster, Quay push access.
 
 ```bash
 cd ocp-lab/learning/ebpf
-podman build -t quay.io/rh_ee_lguoqing/toolbox:latest -f Dockerfile .
+chmod +x build.sh
+
+./build.sh
+# tags: quay.io/rh_ee_lguoqing/ocp-trace:4.16.37  (from clusterversion)
+# also:  quay.io/rh_ee_lguoqing/ocp-trace:latest
+
+podman logout quay.io
+podman login quay.io -u <your-quay-user>
+podman push quay.io/rh_ee_lguoqing/ocp-trace:4.16.37
+podman push quay.io/rh_ee_lguoqing/ocp-trace:latest
 ```
 
-Packages are listed in [`Dockerfile`](Dockerfile). Edit the `dnf install` block to add or remove tools, then rebuild.
-
-### Push
+Set image reference for commands below:
 
 ```bash
-podman login quay.io
-podman push quay.io/rh_ee_lguoqing/toolbox:latest
+OCP_TRACE="quay.io/rh_ee_lguoqing/ocp-trace:$(oc get clusterversion version -o jsonpath='{.status.desired.version}')"
+echo "$OCP_TRACE"
 ```
 
-### Run — attach to a pod with `oc debug`
-
-Example: debug CoreDNS on the same node as a client pod.
+Custom repo or tag:
 
 ```bash
-# 1. Pick the dns-default pod on the client's node
+./build.sh -t quay.io/<your-user>/ocp-trace:4.16.37
+./build.sh --no-latest          # only the version tag, skip :latest
+```
+
+Dockerfile only:
+
+```bash
+./build.sh -n
+```
+
+Add/remove tools: edit [`packages.txt`](packages.txt), then rebuild.
+
+**After OCP upgrade:** run `./build.sh` and push the new version tag.
+
+---
+
+## Run — debug a pod
+
+```bash
+OCP_TRACE="quay.io/rh_ee_lguoqing/ocp-trace:$(oc get clusterversion version -o jsonpath='{.status.desired.version}')"
+
 NODE=$(oc get pod -n <client-ns> <client-pod> -o jsonpath='{.spec.nodeName}')
 DNS_POD=$(oc get pods -n openshift-dns -l dns.operator.openshift.io/daemonset-dns=default \
   --field-selector spec.nodeName="$NODE" -o jsonpath='{.items[0].metadata.name}')
 
-# 2. Attach toolbox (shares network + process namespace with CoreDNS)
 oc -n openshift-dns debug -it "$DNS_POD" \
-  --image=quay.io/rh_ee_lguoqing/toolbox:latest \
+  --image="$OCP_TRACE" \
   --target=dns \
   --share-processes \
   --profile=netadmin
 ```
 
-Inside the debug shell:
+Inside:
 
 ```bash
-# verify you see CoreDNS
 ps aux | grep coredns
-
-# capture DNS on the pod interface
 tcpdump -i eth0 -n -vv 'port 53 or port 5353'
-
-# eBPF examples (need sufficient capabilities)
-bpftrace --version
 /usr/share/bcc/tools/biosnoop
 ```
 
-| Flag | Purpose |
-| ---- | ------- |
-| `--target=dns` | Join existing pod; share its network namespace |
-| `--share-processes` | See and trace processes in the target container |
-| `--profile=netadmin` | Capabilities for `tcpdump` on interfaces |
-
-Generic pattern for any pod:
+Generic pattern:
 
 ```bash
 oc -n <namespace> debug -it <pod> \
-  --image=quay.io/rh_ee_lguoqing/toolbox:latest \
-  --target=<container-name> \
+  --image="$OCP_TRACE" \
+  --target=<container> \
   --share-processes \
   --profile=netadmin
 ```
@@ -83,97 +94,71 @@ More DNS examples: [OpenShift network tracing — CoreDNS](../../networking/ocp-
 
 ---
 
-## 2. Kernel-matched eBPF image — build and run
-
-Use when **BCC/bpftrace** must compile against headers that match the **exact OCP worker kernel** (block I/O lab, privileged tracing).
-
-**Requires:** RHEL machine with Podman and an active Red Hat subscription (build pulls pinned `kernel-core` / `kernel-headers` from RHEL repos).
-
-### Build
+## Run — debug a node
 
 ```bash
-# 1. Get worker kernel version
-KERNEL=$(oc get nodes -l node-role.kubernetes.io/worker -o name | head -1 | xargs -I{} \
-  oc debug {} -- chroot /host uname -r)
-echo "$KERNEL"   # e.g. 5.14.0-570.12.1.el9_6.x86_64
+OCP_TRACE="quay.io/rh_ee_lguoqing/ocp-trace:$(oc get clusterversion version -o jsonpath='{.status.desired.version}')"
+NODE=$(oc get nodes -l node-role.kubernetes.io/worker -o jsonpath='{.items[0].metadata.name}')
 
-# 2. Build (writes Dockerfile.ebpf so the Fedora toolbox Dockerfile is untouched)
-cd ocp-lab/learning/ebpf
-./build-ebpf.sh -k "$KERNEL" -o Dockerfile.ebpf --no-build
-
-podman build --volume /etc/pki/entitlement:/etc/pki/entitlement:ro,Z \
-  --volume /etc/rhsm:/etc/rhsm:ro,Z \
-  --volume /etc/yum.repos.d/redhat.repo:/etc/yum.repos.d/redhat.repo:ro,Z \
-  -t ebpf-9.6 -f Dockerfile.ebpf .
+oc debug "node/$NODE" -it --image="$OCP_TRACE" -- bash
 ```
 
-Or one step (overwrites `Dockerfile` — run `git checkout -- Dockerfile` afterward):
+Use **`-it`**. Stay in the **container** shell for eBPF:
 
 ```bash
-./build-ebpf.sh -k 5.14.0-570.12.1.el9_6.x86_64
+uname -r
+rpm -q kernel-headers bpftrace bcc-tools
+/usr/share/bcc/tools/biolatency    # Ctrl+C for histogram
 ```
 
-Image is tagged **`ebpf-<ubi-version>`** (e.g. `ebpf-9.6` from `el9_6` in the kernel string). Contains **bpftrace**, **bpftool**, **bcc**, and matched kernel headers.
-
-### Push
+Long-lived privileged pod — [`ocp-trace-pod.yaml`](ocp-trace-pod.yaml):
 
 ```bash
-podman tag ebpf-9.6 quay.io/rh_ee_lguoqing/ebpf_96:latest
-podman login quay.io
-podman push quay.io/rh_ee_lguoqing/ebpf_96:latest
+OCP_VER=$(oc get clusterversion version -o jsonpath='{.status.desired.version}')
+NODE=$(oc get nodes -l node-role.kubernetes.io/worker -o jsonpath='{.items[0].metadata.name}')
+
+sed "s/OCP_VERSION/${OCP_VER}/" ocp-trace-pod.yaml | oc apply -f -
+oc patch pod ocp-trace-node --type merge -p "{\"spec\":{\"nodeName\":\"$NODE\"}}"
+oc wait --for=condition=Ready pod/ocp-trace-node --timeout=120s
+oc exec -it ocp-trace-node -- bash
 ```
 
-### Run — privileged pod
-
-Apply a pod spec that uses the image, e.g. [`templates/cnv/ddpod.yaml`](../../templates/cnv/ddpod.yaml):
+Block I/O lab — [`templates/cnv/ddpod.yaml`](../../templates/cnv/ddpod.yaml):
 
 ```bash
-oc apply -f templates/cnv/ddpod.yaml
-oc exec -it dd-experiment -- bash
+sed "s/OCP_VERSION/${OCP_VER}/" ../../templates/cnv/ddpod.yaml | oc apply -f -
 ```
-
-Inside the pod:
-
-```bash
-bpftrace --version
-bpftool prog list
-```
-
-For block I/O tracing, use **`bio*`** tools if you add `bcc-tools` to the image, or run **`bpftrace`** one-liners. The sample `ddpod.yaml` mounts `/sys/kernel/debug` and a block device for storage experiments.
 
 ---
 
 ## BCC tools (quick reference)
 
-**bcc-tools** (in the Fedora toolbox) are prebuilt eBPF scripts from [iovisor/bcc](https://github.com/iovisor/bcc):
-
 | Path | Contents |
 | ---- | -------- |
-| `/usr/share/bcc/tools/` | Scripts — `execsnoop`, `biolatency`, `biotop`, `biosnoop`, … |
+| `/usr/share/bcc/tools/` | `biolatency`, `biotop`, `biosnoop`, `execsnoop`, … |
 | `man bcc-<toolname>` | Man pages |
-| `/usr/share/bcc/tools/doc/` | Examples |
 
-**Block I/O:** `biolatency` (latency histogram), `biotop` (top I/O processes), `biosnoop` (per-I/O trace).
-
-**Alternative:** [libbpf-tools](https://github.com/iovisor/bcc/tree/master/libbpf-tools) (`bpf-biolatency`, etc.) — smaller CO-RE binaries, less kernel-header coupling. Not in the current Dockerfile; add `libbpf-tools` if you want them.
+Upstream: [iovisor/bcc](https://github.com/iovisor/bcc).
 
 ---
 
 ## Troubleshooting
 
-**Podman storage mismatch** (wrong `$HOME` in error):
+| Problem | Fix |
+| ------- | --- |
+| Wrong/missing kernel headers after upgrade | Rebuild and use new **version tag**, not an old one |
+| Build fails on Fedora | Build on subscribed **RHEL** |
+| `unauthorized` on push | Login as Quay user with write access (not cluster robot) |
+| Debug exits immediately | Add **`-it`** to `oc debug` |
 
 ```bash
-rm -rf ~/.local/share/containers/storage ~/.config/containers
-podman info
+podman login quay.io --get-login
+oc get clusterversion version -o jsonpath='{.status.desired.version}{"\n"}'
 ```
-
-**Two Dockerfiles in this directory:** [`Dockerfile`](Dockerfile) = Fedora toolbox (git). `Dockerfile.ebpf` or generated `Dockerfile` = UBI kernel-matched image from `build-ebpf.sh`.
 
 ---
 
 ## Related docs
 
-- [OpenShift network tracing](../../networking/ocp-network-tracing/ocp-net-tracing.md) — DNS path, OVN, tcpdump from client pods
-- [nettools-fedora](../../networking/ocp-network-tracing/README.md) — lighter toolbox without eBPF packages
-- [DNS resolution debugging](../../networking/dns-resolution-issue/dns-resolution-error.md)
+- [OpenShift Driver Toolkit](https://docs.redhat.com/en/documentation/openshift_container_platform/latest/html/specialized_hardware_and_driver_enablement/driver-toolkit)
+- [OpenShift network tracing](../../networking/ocp-network-tracing/ocp-net-tracing.md)

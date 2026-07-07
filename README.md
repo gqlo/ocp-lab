@@ -6,7 +6,7 @@ A collection of learning materials, scripts, and templates for OCP. Includes han
 
 | Topic | Guide |
 | ----- | ----- |
-| eBPF | [eBPF lab](learning/ebpf/epbf-lab.md) |
+| eBPF / ocp-trace | [ocp-trace](learning/ebpf/ebpf-lab.md) |
 | Ceph — storage | [PVC vs snapshot vs clone](learning/ceph/pvc-vs-snapshot-clone.md) |
 | Monitoring | [Kernel `/proc/diskstats`](learning/monitoring/kernel-proc-diskstats.md) |
 | Networking — tracing | [OpenShift network tracing](learning/networking/ocp-network-tracing/ocp-net-tracing.md) |

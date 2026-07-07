@@ -1,0 +1,41 @@
+# Privileged pod on a worker for node-level eBPF / block tracing.
+# Image tag must match cluster OCP version (built with build.sh).
+#
+# Apply:
+#   OCP_VER=$(oc get clusterversion version -o jsonpath='{.status.desired.version}')
+#   NODE=$(oc get nodes -l node-role.kubernetes.io/worker -o jsonpath='{.items[0].metadata.name}')
+#   sed "s/OCP_VERSION/${OCP_VER}/" ocp-trace-pod.yaml | oc apply -f -
+#   oc patch pod ocp-trace-node --type merge -p "{\"spec\":{\"nodeName\":\"$NODE\"}}"
+#
+# Shell:
+#   oc exec -it ocp-trace-node -- bash
+#
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ocp-trace-node
+  labels:
+    app: ocp-trace
+spec:
+  # nodeName: f12-h16-000-r660
+  hostPID: true
+  containers:
+  - name: ocp-trace
+    image: quay.io/rh_ee_lguoqing/ocp-trace:OCP_VERSION
+    imagePullPolicy: Always
+    command: ["sleep", "infinity"]
+    securityContext:
+      privileged: true
+    volumeMounts:
+    - name: host
+      mountPath: /host
+    - name: kernel-debug
+      mountPath: /sys/kernel/debug
+  volumes:
+  - name: host
+    hostPath:
+      path: /
+  - name: kernel-debug
+    hostPath:
+      path: /sys/kernel/debug
+      type: Directory
