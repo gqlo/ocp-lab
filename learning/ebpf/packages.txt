@@ -16,8 +16,8 @@ iproute
 iputils
 bind-utils
 net-tools
-bridge-utils
 ethtool
+# bridge-utils — not in RHEL 9; use iproute (ip link / bridge) instead
 # Network testing
 curl
 wget
