@@ -605,7 +605,7 @@ nameserver 10.1.36.2
 **Tracing tips**
 
 - From a **client pod**, **`tcpdump -i eth0 'udp port 53'`** shows only **`pod IP ↔ 172.30.0.10`**—the upstream hops are invisible at the pod interface.
-- From inside a **`dns-default`** pod, capture **`udp port 53 or port 5353`** on **`eth0`** to see **CoreDNS → `10.1.48.x:53`** on a cache miss (see also [epbf-lab.md](../../ebpf/epbf-lab.md)).
+- From inside a **`dns-default`** pod, capture **`udp port 53 or port 5353`** on **`eth0`** to see **CoreDNS → `10.1.48.x:53`** on a cache miss (see also [ebpf-lab.md](../../ebpf/ebpf-lab.md)).
 - DNS queries are **UDP/53** (sometimes **TCP/53** for large responses); they follow the same **node egress / bastion SNAT** path as other traffic once they leave the cluster overlay—see [Tracing a Packet from Pod to the Internet](#tracing-a-packet-from-pod-to-the-internet).
 
 **Note:** Other lab snapshots in this guide (for example clusters on **`198.18.0.0/16`**) use different upstream IPs, but the **pattern** is the same: **pod → CoreDNS Service → node resolvers → bastion / lab DNS → Internet**.

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Only keep kernel version as the primary default
-KERNEL_VERSION="5.14.0-427.40.1.el9_4.x86_64"
+KERNEL_VERSION="5.14.0-570.12.1.el9_6.x86_64"
 OUTPUT_FILE="Dockerfile"
 
 # Function to extract UBI info from kernel version string
@@ -34,10 +34,11 @@ function show_usage {
     echo "  -b, --baseos-repo REPO         Override baseos repository (auto-generated from UBI major)"
     echo "  -a, --appstream-repo REPO      Override appstream repository (auto-generated from UBI major)"
     echo "  -o, --output FILE              Specify output file (default: ${OUTPUT_FILE})"
+    echo "  -n, --no-build                 Generate Dockerfile only; do not run podman build"
     echo "  -h, --help                     Display this help message"
     echo ""
     echo "Example:"
-    echo "  $0 --kernel-version 5.14.0-427.42.1.el9_4.x86_64"
+    echo "  $0 --kernel-version 5.14.0-570.12.1.el9_6.x86_64"
     echo ""
     echo "Note: The script automatically extracts UBI version information from the kernel version"
     echo "      by reading the 'el9_4' portion and deriving UBI major version (9) and full version (9.4)."
@@ -69,6 +70,10 @@ while [[ $# -gt 0 ]]; do
         -o|--output)
             OUTPUT_FILE="$2"
             shift 2
+            ;;
+        -n|--no-build)
+            NO_BUILD=1
+            shift
             ;;
         -h|--help)
             show_usage
@@ -136,6 +141,12 @@ echo "  - Appstream repo: ${APPSTREAM_REPO}"
 
 IMAGE_NAME="ebpf-$UBI_VERSION"
 echo ""
+
+if [[ -n "$NO_BUILD" ]]; then
+    echo "Dockerfile written to ${OUTPUT_FILE}. Skipping build (--no-build)."
+    exit 0
+fi
+
 echo "Building the image..."
 
 podman build --volume /etc/pki/entitlement:/etc/pki/entitlement:ro,Z \

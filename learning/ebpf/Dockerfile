@@ -1,57 +1,10 @@
-# Toolbox image for: kubectl -n openshift-dns debug -it <dns-default-pod> --image=quay.io/rh_ee_lguoqing/toolbox --target=dns --share-processes --profile=netadmin
-FROM fedora:40
-
-RUN dnf install -y \
-    # eBPF / tracing
-    bpftrace \
-    bcc-tools \
-    kernel-devel \
-    perf \
-    strace \
-    ltrace \
-    blktrace \
-    # Network capture & analysis
-    tcpdump \
-    wireshark-cli \
-    conntrack-tools \
-    # IP / DNS / routing
-    iproute \
-    iputils \
-    bind-utils \
-    net-tools \
-    bridge-utils \
-    ethtool \
-    # Network testing
-    curl \
-    wget \
-    nmap-ncat \
-    nmap \
-    iperf3 \
-    socat \
-    traceroute \
-    telnet \
-    nc \
-    mtr \
-    # Process / system
-    procps-ng \
-    psmisc \
-    sysstat \
-    lsof \
-    pciutils \
-    iftop \
-    iotop \
-    htop \
-    # Storage / disk
-    gdisk \
-    hdparm \
-    smartmontools \
-    nvme-cli \
-    # Shell / utilities
-    util-linux \
-    passwd \
-    bash-completion \
-    vim \
-    less \
-    && dnf clean all
-
-CMD ["/bin/bash"]
+FROM registry.access.redhat.com/ubi9:9.8
+RUN dnf install --disablerepo='*' --enablerepo=rhel-9-for-x86_64-baseos-eus-rpms --enablerepo=rhel-9-for-x86_64-appstream-eus-rpms --releasever=9.8 \
+        sysstat -y 
+# Install OCP node version of kernel-core and kernel-headers      
+RUN dnf install --disablerepo='*' --enablerepo=rhel-9-for-x86_64-baseos-eus-rpms --enablerepo=rhel-9-for-x86_64-appstream-eus-rpms --releasever=9.8 \
+        kernel-core-5.14.0-687.11.1.el9_8.x86_64 kernel-headers-5.14.0-687.11.1.el9_8.x86_64 -y
+# Install bpftrace and bpftool, and their dependencies (bcc, python-bcc)
+RUN dnf install --disablerepo='*' --enablerepo=rhel-9-for-x86_64-baseos-eus-rpms --enablerepo=rhel-9-for-x86_64-appstream-eus-rpms --releasever=9.8 \
+        bpftrace bpftool -y
+RUN dnf clean all

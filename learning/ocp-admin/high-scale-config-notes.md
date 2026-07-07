@@ -11,11 +11,14 @@ Operational tweaks and queries for the CNV high-scale / ODF test cluster. See al
     - [TSDB block dates and sizes](#tsdb-block-dates-and-sizes)
   - [Prometheus DB growth (PromQL)](#prometheus-db-growth-promql)
   - [Monitoring alerts](#monitoring-alerts)
+  - [Slack alerting (Alertmanager)](#slack-alerting-alertmanager)
 - [OpenShift Data Foundation](#openshift-data-foundation)
+  - [Zap disks before ODF install](#zap-disks-before-odf-install)
   - [CSI Addons controller manager (memory)](#csi-addons-controller-manager-memory)
   - [OCS metrics exporter (memory)](#ocs-metrics-exporter-memory)
   - [OSD CPU and memory](#osd-cpu-and-memory)
   - [Ceph block pool PG tuning](#ceph-block-pool-pg-tuning)
+  - [Default StorageClass for CNV](#default-storageclass-for-cnv)
   - [ODF alerts](#odf-alerts)
 - [Worker KubeletConfig](#worker-kubeletconfig)
   - [highscale (`maxPods`)](#highscale-maxpods)
@@ -140,9 +143,156 @@ prometheus_tsdb_storage_blocks_bytes{
 |-------|----------------|
 | `PersistentVolumeFillingUp` (`prometheusdb-*`) | Check TSDB query above; lower `retention`, set `retentionSize`, or expand PVC |
 
+### Slack alerting (Alertmanager)
+
+Flow: **PrometheusRule (firing) → Alertmanager → Slack Incoming Webhook**.
+
+Alertmanager runs in `openshift-monitoring`. The webhook URL is the "API" — create it at
+[api.slack.com/apps](https://api.slack.com/apps) → Create App → Incoming Webhooks ON → pick
+channel. **Never commit the URL** to a public repo (no auth; anyone with the URL can post).
+
+| What | Where |
+|------|-------|
+| Webhook URL | Slack app → Incoming Webhooks |
+| Alertmanager config | Secret `alertmanager-main` in `openshift-monitoring` |
+| Console | Administration → Cluster Settings → Configuration → Alertmanager |
+
+**Console (quick):** cluster-admin → Alertmanager → add receiver → Slack → paste webhook URL
+and channel.
+
+**YAML (GitOps):** edit `alertmanager.yaml` in the `alertmanager-main` secret:
+
+```yaml
+global:
+  slack_api_url: 'https://hooks.slack.com/services/T.../B.../XXX'
+
+receivers:
+  - name: slack-critical
+    slack_configs:
+      - channel: '#alerts'
+        send_resolved: true
+        username: 'OpenShift Alertmanager'
+        color: '{{ if eq .Status "firing" }}danger{{ else }}good{{ end }}'
+        title: '{{ template "slack.default.title" . }}'
+        text: '{{ template "slack.default.text" . }}'
+
+route:
+  receiver: slack-critical
+  routes:
+    - match:
+        severity: critical
+      receiver: slack-critical
+```
+
+Apply:
+
+```bash
+oc -n openshift-monitoring create secret generic alertmanager-main \
+  --from-file=alertmanager.yaml=alertmanager.yaml \
+  --dry-run=client -o yaml | oc apply -f -
+```
+
+**ArgoCD / Sealed Secrets:** encrypt the webhook URL with Sealed Secrets and commit safely.
+Annotate the existing `alertmanager-main` secret with
+`sealedsecrets.bitnami.com/managed="true"` before ArgoCD overwrites it (a PreSync hook job
+works well).
+
+At high scale (~250 nodes, ~75k VMs), add route rules by `severity` and `namespace` so one
+channel is not flooded — extend the `route.routes` block with additional `match` receivers.
+
 ---
 
 ## OpenShift Data Foundation
+
+### Zap disks before ODF install
+
+Wipe OSD disks **on each storage node** before a fresh ODF install (or when reusing
+disks from a prior Ceph/ODF deployment). `wipefs` and a short `dd` zero pass are not
+enough: BlueStore leaves superblock and label metadata that Local Storage Operator /
+Rook can still detect, which blocks clean discovery or causes OSD prepare failures.
+
+Use **`ceph-bluestore-tool zap-device`** from the same Ceph major image as the target
+ODF release (e.g. `quay.io/ceph/ceph:v19` for ODF 4.19).
+
+#### Preconditions
+
+| Check | Why |
+|-------|-----|
+| Run on the **node that owns the disk** | The block device must be local (`oc debug` works but direct SSH is simpler for many nodes) |
+| **Correct device** — not the OS disk | Double-check `lsblk`, `by-path`, and serial; high-scale workers use a dedicated NVMe for ODF |
+| Disk **unmounted**, no LVM PV, no filesystem | `findmnt`, `pvs`, `lsblk -f` should show an empty raw block device |
+| No OSD pod using the disk | On reinstall: remove old `StorageCluster` / `LocalVolume` / `LocalVolumeSet` first; cordon/drain if an OSD is still bound |
+| Ceph image tag matches ODF | `oc get csv -n openshift-storage -o jsonpath='{.items[*].spec.version}'` or cluster docs |
+
+Identify the ODF disk on a worker (example — adjust model/path for your hardware):
+
+```bash
+lsblk -o NAME,SIZE,TYPE,MOUNTPOINT,MODEL,SERIAL
+ls -l /dev/disk/by-path/
+```
+
+Set the **whole-disk** device name (not a partition):
+
+```bash
+disk=nvme1n1   # example; must match the dedicated ODF NVMe on this node
+```
+
+#### Zap with podman on the node
+
+OpenShift nodes already have podman and kubelet registry auth at
+`/var/lib/kubelet/config.json`. Run as root on the node:
+
+```bash
+sudo /usr/bin/podman run \
+  --authfile /var/lib/kubelet/config.json \
+  --rm -ti \
+  --privileged \
+  --device /dev/$disk \
+  --entrypoint ceph-bluestore-tool \
+  quay.io/ceph/ceph:v19 \
+  zap-device --dev /dev/$disk --yes-i-really-really-mean-it
+```
+
+Flags in short:
+
+| Flag | Role |
+|------|------|
+| `--authfile /var/lib/kubelet/config.json` | Pull `quay.io/ceph/ceph` using node/kubelet credentials |
+| `--privileged` + `--device /dev/$disk` | Pass the raw block device into the container |
+| `--entrypoint ceph-bluestore-tool` | Run the zap helper instead of the default `ceph` entrypoint |
+| `--yes-i-really-really-mean-it` | Required confirmation; **destroys all data on the device** |
+
+Repeat on **every** storage node and **every** disk that will back OSDs.
+
+#### Verify
+
+On the node, the disk should show no filesystem, no BlueStore label, and no partitions:
+
+```bash
+lsblk /dev/$disk
+wipefs /dev/$disk          # should print nothing
+file -s /dev/$disk           # typically "data" on a clean device
+```
+
+Optional — confirm BlueStore metadata is gone (same image):
+
+```bash
+sudo /usr/bin/podman run --rm -ti --privileged --device /dev/$disk \
+  --entrypoint ceph-bluestore-tool quay.io/ceph/ceph:v19 \
+  show-label --dev /dev/$disk
+```
+
+Expect an error or empty output on a successfully zapped disk.
+
+#### After zap
+
+1. Apply `LocalVolumeSet` / storage node labels per your ODF bare-metal flow (`templates/odf/`).
+2. Install or recreate the `StorageCluster` and confirm Local Storage Operator discovers devices.
+3. Watch OSD prepare pods: `oc get pods -n openshift-storage -l app=rook-ceph-osd`.
+
+**Note:** `scripts/ceph/clean_odf_disk.sh` (dd + `wipefs` via `oc debug`) is a lighter
+cleanup for non-Ceph disks; prefer `ceph-bluestore-tool zap-device` when the disk ever
+hosted a BlueStore OSD.
 
 ### CSI Addons controller manager (memory)
 
@@ -184,18 +334,94 @@ propagates this to the CephCluster device sets, which Rook uses for OSD pod limi
 oc patch storagecluster ocs-storagecluster -n openshift-storage --type=json -p \
   '[{"op":"replace","path":"/spec/storageDeviceSets/0/resources","value":{"requests":{"cpu":"5","memory":"24Gi"},"limits":{"cpu":"5","memory":"24Gi"}}}]'
 
-# Verify StorageCluster → CephCluster → OSD pods
+# Verify StorageCluster → CephCluster → Deployments → pods
 oc get storagecluster ocs-storagecluster -n openshift-storage \
   -o jsonpath='{.spec.storageDeviceSets[0].resources}{"\n"}' | jq .
 
 oc get cephcluster ocs-storagecluster-cephcluster -n openshift-storage \
   -o jsonpath='{range .spec.storage.storageClassDeviceSets[*]}{.name}{": "}{.resources}{"\n"}{end}'
 
+oc get deploy -n openshift-storage -l app=rook-ceph-osd \
+  -o custom-columns=NAME:.metadata.name,CPU:.spec.template.spec.containers[0].resources.requests.cpu,MEM:.spec.template.spec.containers[0].resources.requests.memory | head
+
 oc get pod -n openshift-storage -l app=rook-ceph-osd \
   -o custom-columns=NAME:.metadata.name,CPU:.spec.containers[0].resources.requests.cpu,MEM:.spec.containers[0].resources.requests.memory | head
 ```
 
-OSD Deployments roll after CephCluster updates; existing pods keep old limits until recreated.
+Propagation chain: **StorageCluster → CephCluster → OSD Deployment template → running pod**.
+CephCluster can show the new limits while Deployments and pods still run **2 CPU / 5Gi** (ODF
+defaults). Check Deployments, not pods alone — a rollout only recreates pods from the current
+Deployment spec.
+
+If CephCluster is correct but Deployments are stale, restart the Rook operator first:
+
+```bash
+oc rollout restart deploy/rook-ceph-operator -n openshift-storage
+```
+
+Then test one OSD. When the Deployment template shows the new limits, restart the pod:
+
+```bash
+oc rollout restart deploy/rook-ceph-osd-0 -n openshift-storage
+
+oc get deploy rook-ceph-osd-0 -n openshift-storage \
+  -o jsonpath='{.spec.template.spec.containers[0].resources}{"\n"}' | jq .
+
+oc get pod -n openshift-storage -l app=rook-ceph-osd,ceph-osd-id=0 \
+  -o jsonpath='{.items[0].spec.containers[0].resources}{"\n"}' | jq .
+```
+
+#### Batched rollout (222 OSDs)
+
+Do **not** restart all OSD Deployments at once. Roll in small batches during a maintenance
+window and watch Ceph recovery between batches. At **5 CPU / 24Gi** per OSD, 222 OSDs reserve
+roughly **~1,110 CPU** and **~5.3 TiB** memory cluster-wide — confirm storage nodes can
+schedule the new requests before rolling everything.
+
+List deployments (IDs may not be contiguous):
+
+```bash
+oc get deploy -n openshift-storage -l app=rook-ceph-osd -o name | wc -l
+
+oc get deploy -n openshift-storage -l app=rook-ceph-osd -o name \
+  | sed 's|deployment.apps/rook-ceph-osd-||' | sort -n
+```
+
+Restart in batches (`BATCH=10`, `PAUSE=120` — tune from `ceph -s` recovery):
+
+```bash
+BATCH=10
+PAUSE=120   # seconds between batches — tune from ceph -s recovery
+
+for id in $(seq 0 221); do
+  oc rollout restart deploy/rook-ceph-osd-$id -n openshift-storage 2>/dev/null || true
+  if (( (id + 1) % BATCH == 0 )); then
+    echo "Restarted through osd-$id — check ceph -s"
+    sleep $PAUSE
+  fi
+done
+```
+
+Watch cluster health during rollout (from **rook-ceph-tools**):
+
+```bash
+ceph -s
+ceph pg stat
+```
+
+Spot-check progress:
+
+```bash
+oc get pod -n openshift-storage -l app=rook-ceph-osd \
+  -o custom-columns=MEM:.spec.containers[0].resources.requests.memory --no-headers \
+  | sort | uniq -c
+
+oc get pods -n openshift-storage -l app=rook-ceph-osd --field-selector=status.phase=Pending
+```
+
+If a pod stays at old limits after restart, check whether that **Deployment template** was
+updated. Template still **2/5Gi** → Rook has not reconciled that deployment; restart the
+operator or delete/recreate that one Deployment (one OSD at a time, never all at once).
 
 ### Ceph block pool PG tuning
 
@@ -259,6 +485,41 @@ One-liner from the host (no interactive rsh):
 oc exec -n openshift-storage deploy/rook-ceph-tools -- \
   ceph osd pool get ocs-storagecluster-cephblockpool all
 ```
+
+### Default StorageClass for CNV
+
+Use **`ocs-storagecluster-ceph-rbd-virtualization`** for VM disks (block mode, `mapOptions:
+krbd:rxbounce`). ODF creates this StorageClass when OpenShift Virtualization is installed.
+
+Kubernetes allows only **one** cluster default StorageClass. Unset the current default before
+patching:
+
+```bash
+# List current cluster default(s)
+oc get sc -o jsonpath='{range .items[?(@.metadata.annotations.storageclass\.kubernetes\.io/is-default-class=="true")]}{.metadata.name}{"\n"}{end}'
+
+# Unset old default (commonly ocs-storagecluster-ceph-rbd)
+oc patch storageclass ocs-storagecluster-ceph-rbd -p \
+  '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}'
+
+# Set cluster default for virtualization RBD
+oc patch storageclass ocs-storagecluster-ceph-rbd-virtualization -p \
+  '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
+```
+
+Verify:
+
+```bash
+oc get sc | grep default
+
+oc get sc ocs-storagecluster-ceph-rbd-virtualization -o yaml | grep is-default
+```
+
+**CNV-only default:** OpenShift Virtualization also supports a separate virt-default annotation
+(`storageclass.kubevirt.io/is-default-virt-class`). ODF often sets that on this StorageClass
+automatically. Virt-default applies to VM/DataVolume workloads even when another StorageClass
+is the cluster default. Use the cluster-default patch above when PVCs without
+`storageClassName` (including boot sources) must land on the virtualization SC.
 
 ### ODF alerts
 
