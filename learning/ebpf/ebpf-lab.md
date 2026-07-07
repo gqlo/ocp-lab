@@ -147,7 +147,8 @@ Upstream: [iovisor/bcc](https://github.com/iovisor/bcc).
 | Problem | Fix |
 | ------- | --- |
 | Wrong/missing kernel headers after upgrade | Rebuild and use new **version tag**, not an old one |
-| `No package matches '…'` during `./build.sh` | Package not in RHEL 9 BaseOS/AppStream — remove from [`packages.txt`](packages.txt) (e.g. `iftop`, `htop`, `bridge-utils`) |
+| `No package matches '…'` during `./build.sh` | Package not in RHEL 9 BaseOS/AppStream — remove from [`packages.txt`](packages.txt) |
+| `cannot install the best candidate` / `curl-minimal` vs `curl` | DTK ships **curl-minimal** — do not install `curl` in packages.txt |
 | `unauthorized` on push | Login as Quay user with write access (not cluster robot) |
 | Debug exits immediately | Add **`-it`** to `oc debug` |
 
