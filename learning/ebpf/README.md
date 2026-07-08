@@ -1,14 +1,32 @@
-# ocp-trace
+# eBPF and debugging on OpenShift
 
-**ocp-trace** is a debug container image for OpenShift: Driver Toolkit (RHCOS-matched kernel headers) plus eBPF, network capture, and shell utilities. Use it for **`oc debug`** into pods **or** on nodes.
+Hands-on guide for **eBPF tracing**, **network capture**, and **system debugging** on OpenShift Container Platform using the **ocp-trace** debug image.
+
+**ocp-trace** is built on **Driver Toolkit** (RHCOS-matched kernel headers) and ships BCC/bpftrace plus conventional network and shell utilities. Use it with **`oc debug`** on nodes or pods, or as a long-lived privileged pod for sustained tracing.
 
 | Image | Built by | Use for |
 | ----- | -------- | ------- |
-| **`quay.io/rh_ee_lguoqing/ocp-trace:<OCP-version>`** | [`build.sh`](build.sh) | Pod debug (tcpdump, CoreDNS) **and** node eBPF (bcc, bpftrace, bio*) |
+| **`quay.io/rh_ee_lguoqing/ocp-trace:<OCP-version>`** | [`build.sh`](build.sh) | Node eBPF (bcc, bpftrace, bio*), pod debug, network capture |
 
 Example: `quay.io/rh_ee_lguoqing/ocp-trace:4.22.0` — tag matches `oc get clusterversion version`. [`build.sh`](build.sh) also tags `:latest` for convenience.
 
-**Why version tags?** The image is built on **Driver Toolkit**, which changes with each OCP release. Pin the tag to your cluster version so kernel headers stay matched after upgrades.
+**Why version tags?** Driver Toolkit changes with each OCP release. Pin the tag to your cluster version so kernel headers stay matched after upgrades.
+
+## What's in the image
+
+Packages come from [`packages.txt`](packages.txt) (RHEL 9 BaseOS / AppStream on Driver Toolkit).
+
+| Category | Packages |
+| -------- | -------- |
+| **eBPF / tracing** | `bpftrace`, `bcc-tools`, `bpftool`, `perf`, `strace`, `ltrace`, `blktrace` |
+| **Network capture** | `tcpdump`, `conntrack-tools` |
+| **IP / DNS / routing** | `iproute`, `iputils`, `bind-utils`, `net-tools`, `ethtool` |
+| **Network testing** | `wget`, `nmap`, `iperf3`, `socat`, `traceroute`, `telnet`, `mtr` |
+| **Process / system** | `procps-ng`, `psmisc`, `sysstat`, `lsof`, `iotop` |
+| **Storage** | `gdisk`, `hdparm`, `smartmontools`, `nvme-cli` |
+| **Shell** | `bash-completion`, `less` |
+
+Compared to [nettools-fedora](../networking/ocp-network-tracing/) (Fedora toolbox for network labs), ocp-trace adds **eBPF** and **kernel-header alignment** via Driver Toolkit. Use nettools-fedora for Wireshark/`curl` on Fedora; use ocp-trace for bcc/bpftrace and version-matched node tracing.
 
 ## Catalog
 
@@ -17,6 +35,8 @@ Example: `quay.io/rh_ee_lguoqing/ocp-trace:4.22.0` — tag matches `oc get clust
 - [Build and push](#build-and-push)
 - [Run — debug a pod](#run--debug-a-pod)
 - [Run — long-lived pod](#run--long-lived-pod)
+- [Network debugging](#network-debugging)
+- [eBPF tracing](#ebpf-tracing)
 - [BCC tools catalog](#bcc-tools-catalog)
   - [Block I/O](#block-io)
   - [CPU and scheduler](#cpu-and-scheduler)
@@ -144,6 +164,121 @@ sed -e "s/OCP_VERSION/${OCP_VER}/" -e "s/NODE_NAME/${NODE}/" ocp-trace-pod.yaml 
 oc wait --for=condition=Ready pod/ocp-trace-node --timeout=120s
 oc exec -it ocp-trace-node -- bash
 ```
+
+---
+
+## Network debugging
+
+Use ocp-trace as a debug shell inside a pod or on a node. Set the image once:
+
+```bash
+OCP_TRACE=quay.io/rh_ee_lguoqing/ocp-trace:4.22.0
+```
+
+### Packet capture (`tcpdump`)
+
+From a **pod debug** shell (shared network namespace with the target container):
+
+```bash
+kubectl debug -it <pod> --image="$OCP_TRACE" --target=<container> -n <namespace>
+
+# inside — capture pod traffic on eth0
+tcpdump -i eth0 -nn -vv 'port 53 or port 5353'    # DNS
+tcpdump -i eth0 -nn host <peer-ip>
+tcpdump -i lo -nn 'port 8080'                      # loopback (multi-container pod)
+```
+
+From a **node debug** shell (host interfaces — do **not** `chroot /host`; RHCOS has no tcpdump):
+
+```bash
+oc debug "node/$NODE" --image="$OCP_TRACE"
+
+# inside — host veth or physical NIC
+ip link show
+tcpdump -i <veth-or-nic> -nn icmp
+```
+
+More topology and veth examples: [OpenShift network tracing](../networking/ocp-network-tracing/ocp-net-tracing.md).
+
+### DNS and connectivity
+
+```bash
+dig +short kubernetes.default.svc.cluster.local
+dig @172.30.0.10 myapp.example.com                    # cluster DNS Service IP
+nslookup <hostname>
+mtr -rw <destination>
+traceroute <destination>
+iperf3 -c <server> -t 10
+```
+
+Pair **`dig`** with **`tcpdump`** on `eth0` to see whether queries leave the pod and what answers come back.
+
+### Connections and routing
+
+```bash
+ss -tunap
+ip route
+ip neigh
+conntrack -L | head
+ethtool -S eth0
+```
+
+### Process and syscall inspection
+
+```bash
+ps aux
+lsof -i :8080
+strace -fp <pid> -e trace=network
+```
+
+---
+
+## eBPF tracing
+
+Node-level eBPF needs kernel headers matched to the node kernel — that is why ocp-trace is built on Driver Toolkit. Pod debug shells can run **userspace** network tools and some BCC tools against the target process namespace; **block I/O** and deep kernel tracing are easiest from **node debug** or the [long-lived pod](#run--long-lived-pod).
+
+### bpftrace
+
+Quick sanity check:
+
+```bash
+bpftrace -e 'BEGIN { printf("ok\n"); exit() }'
+```
+
+One-liner examples:
+
+```bash
+# count syscalls by process (10s)
+bpftrace -e 'tracepoint:raw_syscalls:sys_enter { @[comm] = count(); } interval:s:10 { exit(); }'
+
+# TCP connect attempts
+bpftrace -e 'tracepoint:syscalls:sys_enter_connect { printf("%s -> %s\n", comm, ntop(args->uservaddr)); }'
+```
+
+### BCC tools
+
+BCC ships **105** tools under `/usr/share/bcc/tools/`:
+
+```bash
+export PATH=/usr/share/bcc/tools:$PATH
+
+biolatency      # block I/O latency histogram — Ctrl+C to print
+biosnoop        # per-I/O latency with PID
+tcpconnect      # active TCP connections
+execsnoop       # new processes
+gethostlatency  # DNS resolver latency
+man bcc-biolatency
+```
+
+| Goal on OpenShift | Start here |
+| ----------------- | ---------- |
+| Disk / PVC latency on a node | `biolatency`, `biosnoop`, `biotop` |
+| DNS / TCP from a pod debug shell | `tcpconnect`, `gethostlatency`, plus `tcpdump` |
+| Slow XFS on RHCOS | `xfsdist`, `xfsslower`, `fileslower` |
+| Scheduler / CPU wait | `runqlen`, `runqslower`, `offcputime`, `profile` |
+| New processes / suspicious exec | `execsnoop`, `opensnoop` |
+
+Full inventory below. Upstream: [bcc tools](https://github.com/iovisor/bcc#tools) · [bcc tutorial](https://github.com/iovisor/bcc/blob/master/docs/tutorial.md)
 
 ---
 
@@ -302,6 +437,8 @@ Wrappers around BCC `lib` helpers. Require the target language runtime and often
 
 ### Suggested starting points (OpenShift)
 
+See [eBPF tracing](#ebpf-tracing) for the same table in context.
+
 | Goal | Tools |
 | ---- | ----- |
 | Disk / PVC latency on a node | `biolatency`, `biosnoop`, `biotop`, `biopattern` |
@@ -310,8 +447,6 @@ Wrappers around BCC `lib` helpers. Require the target language runtime and often
 | Scheduler / CPU wait | `runqlen`, `runqslower`, `offcputime`, `profile` |
 | New processes / suspicious exec | `execsnoop`, `opensnoop` |
 | Capabilities / security | `capable` |
-
-Upstream: [bcc README — Tools](https://github.com/iovisor/bcc#tools) · [bcc tutorial](https://github.com/iovisor/bcc/blob/master/docs/tutorial.md)
 
 ---
 
@@ -335,4 +470,6 @@ oc get clusterversion version -o jsonpath='{.status.desired.version}{"\n"}'
 ## Related docs
 
 - [OpenShift Driver Toolkit](https://docs.redhat.com/en/documentation/openshift_container_platform/latest/html/specialized_hardware_and_driver_enablement/driver-toolkit)
-- [OpenShift network tracing](../../networking/ocp-network-tracing/ocp-net-tracing.md)
+- [OpenShift network tracing](../networking/ocp-network-tracing/ocp-net-tracing.md)
+- [DNS resolution debugging](../networking/dns-resolution-issue/dns-resolution-error.md)
+- [nettools-fedora image](../networking/ocp-network-tracing/) — Fedora toolbox for network-only labs
