@@ -16,7 +16,7 @@ Example: `quay.io/rh_ee_lguoqing/ocp-trace:4.22.0` — tag matches `oc get clust
 - [Published images (Quay)](#published-images-quay)
 - [Build and push](#build-and-push)
 - [Run — debug a pod](#run--debug-a-pod)
-- [Run — debug a node](#run--debug-a-node)
+- [Run — long-lived pod](#run--long-lived-pod)
 - [BCC tools catalog](#bcc-tools-catalog)
   - [Block I/O](#block-io)
   - [CPU and scheduler](#cpu-and-scheduler)
@@ -35,37 +35,20 @@ Example: `quay.io/rh_ee_lguoqing/ocp-trace:4.22.0` — tag matches `oc get clust
 
 ## Quick start
 
-Create a privileged pod on a worker, shell in, and list BCC tools:
+Debug a worker node with ocp-trace:
 
 ```bash
-cd ocp-lab/learning/ebpf
-
-OCP_VER=$(oc get clusterversion version -o jsonpath='{.status.desired.version}')
+OCP_TRACE=quay.io/rh_ee_lguoqing/ocp-trace:4.22.0
 NODE=$(oc get nodes -l node-role.kubernetes.io/worker -o jsonpath='{.items[0].metadata.name}')
 
-sed -e "s/OCP_VERSION/${OCP_VER}/" -e "s/NODE_NAME/${NODE}/" ocp-trace-pod.yaml | oc apply -f -
-oc wait --for=condition=Ready pod/ocp-trace-node --timeout=120s
-
-oc rsh ocp-trace-node
+oc debug "node/$NODE" --image="$OCP_TRACE"
 ```
 
-Inside the pod:
+Inside the debug shell:
 
 ```bash
-ls bcc/tools/ | head
-```
-
-```text
-argdist
-bashreadline
-bindsnoop
-biolatency
-biolatpcts
-biopattern
-biosnoop
-biotop
-bitesize
-bpflist
+ls /usr/share/bcc/tools/ | head
+/usr/share/bcc/tools/biolatency    # Ctrl+C for histogram
 ```
 
 ---
@@ -136,60 +119,22 @@ Add/remove tools: edit [`packages.txt`](packages.txt), then rebuild.
 
 ## Run — debug a pod
 
+Attach the debug container to a **specific container** in a pod with `--target=<container>`:
+
 ```bash
 OCP_TRACE="quay.io/rh_ee_lguoqing/ocp-trace:$(oc get clusterversion version -o jsonpath='{.status.desired.version}')"
 
-NODE=$(oc get pod -n <client-ns> <client-pod> -o jsonpath='{.spec.nodeName}')
-DNS_POD=$(oc get pods -n openshift-dns -l dns.operator.openshift.io/daemonset-dns=default \
-  --field-selector spec.nodeName="$NODE" -o jsonpath='{.items[0].metadata.name}')
-
-oc -n openshift-dns debug -it "$DNS_POD" \
+kubectl debug -it rook-ceph-osd-185-7f8c858f7f-zmw4v \
   --image="$OCP_TRACE" \
-  --target=dns \
-  --share-processes \
-  --profile=netadmin
+  --target=osd \
+  -n openshift-storage
 ```
-
-Inside:
-
-```bash
-ps aux | grep coredns
-tcpdump -i eth0 -n -vv 'port 53 or port 5353'
-/usr/share/bcc/tools/biosnoop
-```
-
-Generic pattern:
-
-```bash
-oc -n <namespace> debug -it <pod> \
-  --image="$OCP_TRACE" \
-  --target=<container> \
-  --share-processes \
-  --profile=netadmin
-```
-
-More DNS examples: [OpenShift network tracing — CoreDNS](../../networking/ocp-network-tracing/ocp-net-tracing.md#coredns-in-the-cluster).
 
 ---
 
-## Run — debug a node
+## Run — long-lived pod
 
-```bash
-OCP_TRACE="quay.io/rh_ee_lguoqing/ocp-trace:$(oc get clusterversion version -o jsonpath='{.status.desired.version}')"
-NODE=$(oc get nodes -l node-role.kubernetes.io/worker -o jsonpath='{.items[0].metadata.name}')
-
-oc debug "node/$NODE" -it --image="$OCP_TRACE" -- bash
-```
-
-Use **`-it`**. Stay in the **container** shell for eBPF:
-
-```bash
-uname -r
-rpm -q kernel-headers bpftrace bcc-tools
-/usr/share/bcc/tools/biolatency    # Ctrl+C for histogram
-```
-
-Long-lived privileged pod — [`ocp-trace-pod.yaml`](ocp-trace-pod.yaml):
+Privileged pod on a worker for sustained node-level eBPF — [`ocp-trace-pod.yaml`](ocp-trace-pod.yaml):
 
 ```bash
 OCP_VER=$(oc get clusterversion version -o jsonpath='{.status.desired.version}')
@@ -198,12 +143,6 @@ NODE=$(oc get nodes -l node-role.kubernetes.io/worker -o jsonpath='{.items[0].me
 sed -e "s/OCP_VERSION/${OCP_VER}/" -e "s/NODE_NAME/${NODE}/" ocp-trace-pod.yaml | oc apply -f -
 oc wait --for=condition=Ready pod/ocp-trace-node --timeout=120s
 oc exec -it ocp-trace-node -- bash
-```
-
-Block I/O lab — [`templates/cnv/ddpod.yaml`](../../templates/cnv/ddpod.yaml):
-
-```bash
-sed "s/OCP_VERSION/${OCP_VER}/" ../../templates/cnv/ddpod.yaml | oc apply -f -
 ```
 
 ---
