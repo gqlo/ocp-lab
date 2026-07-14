@@ -1,5 +1,5 @@
 # NetApp storage network — DHCP on ens2f0np0 (bastion dnsmasq on 10.200.0.0/24)
-# Prerequisite: bastion static IP + dnsmasq (see README.md)
+# Prerequisite: bastion static IP + dnsmasq (see bastion-dhcp-dnsmasq.conf.example)
 # Apply: oc apply -f storage-dhcp-nncp.yaml
 apiVersion: nmstate.io/v1
 kind: NodeNetworkConfigurationPolicy
