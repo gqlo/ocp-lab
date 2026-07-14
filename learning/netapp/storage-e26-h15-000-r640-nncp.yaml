@@ -1,0 +1,22 @@
+# NetApp storage network — static IP on ens2f0np0 (routeless 10.200.0.0/24)
+# Reserved: 10.200.0.10 NetApp NFS LIF
+# Apply: oc apply -f storage-e26-h15-000-r640-nncp.yaml
+apiVersion: nmstate.io/v1
+kind: NodeNetworkConfigurationPolicy
+metadata:
+  name: storage-e26-h15-000-r640
+spec:
+  nodeSelector:
+    kubernetes.io/hostname: e26-h15-000-r640
+  desiredState:
+    interfaces:
+    - name: ens2f0np0
+      type: ethernet
+      state: up
+      ipv4:
+        enabled: true
+        dhcp: false
+        address:
+        - ip: 10.200.0.20
+          prefix-length: 24
+        auto-route-metric: 200

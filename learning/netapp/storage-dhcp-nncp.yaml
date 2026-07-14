@@ -1,0 +1,19 @@
+# NetApp storage network — DHCP on ens2f0np0 (bastion dnsmasq on 10.200.0.0/24)
+# Prerequisite: bastion static IP + dnsmasq (see README.md)
+# Apply: oc apply -f storage-dhcp-nncp.yaml
+apiVersion: nmstate.io/v1
+kind: NodeNetworkConfigurationPolicy
+metadata:
+  name: storage-dhcp
+spec:
+  nodeSelector:
+    node-role.kubernetes.io/worker: ""
+  desiredState:
+    interfaces:
+    - name: ens2f0np0
+      type: ethernet
+      state: up
+      ipv4:
+        enabled: true
+        dhcp: true
+        auto-route-metric: 200

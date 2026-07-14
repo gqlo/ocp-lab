@@ -1,0 +1,17 @@
+# Example dnsmasq config for NetApp storage DHCP on the bastion.
+# Install: dnf install dnsmasq
+# Place as: /etc/dnsmasq.d/netapp-storage.conf
+# Prerequisite: bastion static IP on storage VLAN (see README.md step 1)
+
+interface=ens2f0np0
+bind-interfaces
+except-interface=lo
+
+# DHCP only — do not bind DNS on port 53
+port=0
+
+# Worker pool; excludes 10.200.0.2 (bastion) and 10.200.0.10 (NetApp)
+dhcp-range=10.200.0.11,10.200.0.254,255.255.255.0,24h
+
+# Optional: log leases
+# log-dhcp
