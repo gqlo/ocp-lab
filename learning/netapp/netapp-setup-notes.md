@@ -1,5 +1,28 @@
 # NetApp setup notes
 
+## Prerequisite — nmstate operator
+
+NNCPs require the **Kubernetes NMState Operator** (`openshift-nmstate` namespace).
+
+Verify before applying:
+
+```bash
+oc get nmstate
+oc get pods -n openshift-nmstate
+```
+
+Expect an `nmstate` CR and all `nmstate-handler` pods `Running`. If the operator is not installed, install **Kubernetes NMState Operator** from OperatorHub, then create the instance:
+
+```bash
+oc apply -f - <<'EOF'
+apiVersion: nmstate.io/v1
+kind: NMState
+metadata:
+  name: nmstate
+spec: {}
+EOF
+```
+
 Apply all static NNCPs (run from this directory):
 
 ```bash
