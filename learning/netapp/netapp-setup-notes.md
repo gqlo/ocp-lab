@@ -1,5 +1,29 @@
 # NetApp setup notes
 
+## Lab environment
+
+| Component | Specification |
+|-----------|---------------|
+| Cluster | 10 worker nodes, 3 master nodes |
+| Node type R650 | 5 nodes — 112 CPUs, 512 GB RAM |
+| Node type R640 | 5 nodes — 80 CPUs, 376 GB RAM |
+| Network | 25 Gbps; `ens2f0np0` used for NetApp storage |
+| Bastion | `e26-h03-000-r640.rdu2.scalelab.redhat.com` |
+
+Storage subnet: `10.200.0.0/24` (routeless, on-link). Nine workers get static
+IPs on `ens2f0np0` via NNCP (see verification below).
+
+## NetApp storage
+
+| Attribute | Value |
+|-----------|-------|
+| NFS server | `10.200.0.10` |
+| Export path | `/nfs_data_01` |
+| Volume size | 1 TB |
+| Protocols | NFSv3, NFSv4.0 |
+| Access | Read-write |
+| NetApp cluster | `b02-h37-ntap-a300` |
+
 ## Prerequisite — nmstate operator
 
 NNCPs require the **Kubernetes NMState Operator** (`openshift-nmstate` namespace).
