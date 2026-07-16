@@ -7,11 +7,13 @@
 - [Discover SVM name (required for backend JSON)](#discover-svm-name-required-for-backend-json)
 - [Create backend — success](#create-backend--success)
 - [StorageClass (`trident-nfs-svm`)](#storageclass-trident-nfs-svm)
+- [Verify NFS is providing the storage](#verify-nfs-is-providing-the-storage)
 - [Trident backend create — pod vs host path to ONTAP](#trident-backend-create--pod-vs-host-path-to-ontap)
   - [Symptom](#symptom)
   - [Host path works](#host-path-works-node-e45-h14-000-r650-ip-10200028)
   - [Pod path fails (`routingViaHost`)](#pod-path-fails-even-with-routingviahost-true)
   - [tcpdump on the storage NIC](#tcpdump-on-the-storage-nic-while-pod-curls--create-backend-runs)
+  - [Potential reason — outbound SNAT vs return path](#potential-reason--outbound-snat-vs-return-path)
   - [Conclusion](#conclusion)
   - [Fix applied — `hostNetwork: true`](#fix-applied--trident-controller-hostnetwork-true)
 - [Prerequisite — nmstate operator](#prerequisite--nmstate-operator)
@@ -159,6 +161,54 @@ arbitrary eligible backend.
 `is-default-class: "true"` makes this the default for PVCs that omit
 `storageClassName` (ensure no other default SC conflicts).
 
+## Verify NFS is providing the storage
+
+Trident `ontap-nas` mounts NFS on the **node** (host netns), then bind-mounts
+into the virt-launcher / consumer pod. Confirm on the node that schedules the
+workload (example: VM `vm-08e7f4-1` on `e45-h13-000-r650`).
+
+1. PVC → PV → NFS server/path:
+
+```bash
+oc get pvc vm-08e7f4-1 -n vm-08e7f4-ns-1 \
+  -o jsonpath='sc={.spec.storageClassName} pv={.spec.volumeName}{"\n"}'
+
+oc get pv $(oc get pvc vm-08e7f4-1 -n vm-08e7f4-ns-1 -o jsonpath='{.spec.volumeName}') \
+  -o jsonpath='nfs://{.spec.nfs.server}{.spec.nfs.path}{"\n"}'
+```
+
+Expect `storageClassName: trident-nfs-svm` and `nfs://10.200.0.10:/cluster01_pvc_...`.
+
+2. Node mount (CSI volume under kubelet):
+
+```bash
+oc debug node/e45-h13-000-r650
+# inside:
+chroot /host
+mount | grep nfs
+# or: findmnt -t nfs,nfs4
+```
+
+Lab example (VM disk PVC mounted as NFSv4.0 from the dataLIF, client on the
+storage NIC):
+
+```text
+10.200.0.10:/cluster01_pvc_e5086731_cd77_43b3_9972_1960ace10632 on
+  /var/lib/kubelet/pods/.../volumes/kubernetes.io~csi/pvc-e5086731-.../mount
+  type nfs4 (rw,relatime,vers=4.0,...,proto=tcp,...,clientaddr=10.200.0.27,...,addr=10.200.0.10)
+```
+
+| Field | Meaning |
+|-------|---------|
+| `10.200.0.10:/cluster01_pvc_...` | ONTAP dataLIF + Trident volume export |
+| `kubernetes.io~csi/pvc-.../mount` | kubelet CSI mount for that PVC |
+| `vers=4.0` | Matches backend `nfsMountOptions: nfsvers=4.0` |
+| `clientaddr=10.200.0.27` | Node storage IP on `ens2f0np0` (not the OVN pod IP) |
+| `addr=10.200.0.10` | NFS server |
+
+If `mount | grep nfs` shows that line on the VM’s node, NFS (not local disk /
+RBD) is backing the volume.
+
 ## Trident backend create — pod vs host path to ONTAP
 
 ### Symptom
@@ -254,6 +304,23 @@ Client MSS `1360` matches OVN pod MTU (1400), not a plain host curl.
 | SYN-ACK returns to `10.200.0.28` | NetApp and L2 are fine |
 | No ACK, handshake never completes | Reply not delivered back into the pod/OVN TCP stack |
 | Host `curl` fully completes TLS + HTTP | Node path OK; only **pod return path** is broken |
+
+### Potential reason — outbound SNAT vs return path
+
+`routingViaHost` only changes **egress**: OVN hands the packet to the host
+routing table, which SNATs the pod IP (`10.129.x.x`) to `10.200.0.28` and
+sends it out `ens2f0np0`. The pod still has only `eth0`; it never owns that
+storage IP.
+
+The SYN-ACK comes back to **`10.200.0.28` (host address)**. For the pod to
+complete TCP, the host must reverse-SNAT and inject the reply into OVN. That
+handoff is what fails on this secondary NIC — the kernel treats the packet as
+local to the node (or drops it via `rp_filter` / asymmetric path), so the
+pod’s stack never sees the SYN-ACK (hence no ACK on the wire).
+
+Host `curl` works because client and `10.200.0.28` share one netns — no
+OVN reverse hop. `hostNetwork` / Multus avoid the same gap by putting the
+client on the storage path directly.
 
 ### Conclusion
 
