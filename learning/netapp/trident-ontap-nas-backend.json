@@ -1,0 +1,12 @@
+{
+    "version": 1,
+    "storageDriverName": "ontap-nas",
+    "backendName": "nfs-svm",
+    "managementLIF": "10.200.0.10",
+    "dataLIF": "10.200.0.10",
+    "svm": "nfs",
+    "username": "vsadmin",
+    "password": "g0g0netapp",
+    "storagePrefix": "cluster01",
+    "nfsMountOptions": "nfsvers=4.0"
+}

@@ -1,5 +1,21 @@
 # NetApp setup notes
 
+## Catalog
+
+- [Lab environment](#lab-environment)
+- [NetApp storage](#netapp-storage)
+- [Discover SVM name (required for backend JSON)](#discover-svm-name-required-for-backend-json)
+- [Create backend — success](#create-backend--success)
+- [StorageClass (`trident-nfs-svm`)](#storageclass-trident-nfs-svm)
+- [Trident backend create — pod vs host path to ONTAP](#trident-backend-create--pod-vs-host-path-to-ontap)
+  - [Symptom](#symptom)
+  - [Host path works](#host-path-works-node-e45-h14-000-r650-ip-10200028)
+  - [Pod path fails (`routingViaHost`)](#pod-path-fails-even-with-routingviahost-true)
+  - [tcpdump on the storage NIC](#tcpdump-on-the-storage-nic-while-pod-curls--create-backend-runs)
+  - [Conclusion](#conclusion)
+  - [Fix applied — `hostNetwork: true`](#fix-applied--trident-controller-hostnetwork-true)
+- [Prerequisite — nmstate operator](#prerequisite--nmstate-operator)
+
 ## Lab environment
 
 | Component | Specification |
@@ -23,6 +39,282 @@ IPs on `ens2f0np0` via NNCP (see verification below).
 | Protocols | NFSv3, NFSv4.0 |
 | Access | Read-write |
 | NetApp cluster | `b02-h37-ntap-a300` |
+| SVM (vserver) | `nfs` (not `svm_nfs`) |
+
+Trident ONTAP NAS backend: `trident-ontap-nas-backend.json` (`managementLIF` /
+`dataLIF` = `10.200.0.10`, `"svm": "nfs"`, `vsadmin` credentials). Apply after
+Trident is installed **and** the controller can reach ONTAP (see hostNetwork
+section below):
+
+```bash
+tridentctl -n trident create backend -f trident-ontap-nas-backend.json
+```
+
+## Discover SVM name (required for backend JSON)
+
+`"svm"` in the backend file must be the **exact** ONTAP vserver name
+(case-sensitive). `backendName` is only Trident’s label.
+
+Wrong name fails after network is fixed, e.g.:
+
+```text
+could not create backend: ... error reading SVM details: API status: failed,
+Reason: Specified vserver not found, Code: 15698 (400 Bad Request)
+```
+
+List SVMs via ONTAP REST (from a storage node / hostNetwork path):
+
+```bash
+curl -sk -u 'vsadmin:g0g0netapp' \
+  'https://10.200.0.10/api/svm/svms?fields=name'
+```
+
+Lab response:
+
+```json
+{
+  "records": [
+    {
+      "uuid": "9ec45fff-ba21-11e7-a5dc-00a098b948b8",
+      "name": "nfs"
+    }
+  ],
+  "num_records": 1
+}
+```
+
+Set in `trident-ontap-nas-backend.json`:
+
+```json
+"svm": "nfs"
+```
+
+Notes:
+
+- `vsadmin` is SVM-scoped; `/api/svm/svms` is the right check (not `/api/cluster`).
+- `/api/cluster` often returns 401 for `vsadmin` even with a correct password.
+
+## Create backend — success
+
+With hostNetwork on the controller and `"svm": "nfs"`:
+
+```bash
+./tridentctl create backend -f trident-ontap-nas-backend.json -n trident
+```
+
+```text
++---------+----------------+--------------------------------------+--------+------------+---------+
+|  NAME   | STORAGE DRIVER |                 UUID                 | STATE  | USER-STATE | VOLUMES |
++---------+----------------+--------------------------------------+--------+------------+---------+
+| nfs-svm | ontap-nas      | 21f5a071-a270-4a14-9d42-ee626f24820e | online | normal     |       0 |
++---------+----------------+--------------------------------------+--------+------------+---------+
+```
+
+Verify later:
+
+```bash
+./tridentctl get backend -n trident
+```
+
+## StorageClass (`trident-nfs-svm`)
+
+Manifest: `trident-nfs-svm-storageclass.yaml`. Apply after the backend is
+`online`:
+
+```bash
+oc apply -f trident-nfs-svm-storageclass.yaml
+oc get sc trident-nfs-svm
+```
+
+```yaml
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: trident-nfs-svm
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+provisioner: csi.trident.netapp.io
+reclaimPolicy: Delete
+allowVolumeExpansion: true
+volumeBindingMode: Immediate
+parameters:
+  backendType: "ontap-nas"
+```
+
+### How it selects the backend
+
+The StorageClass does **not** reference backend name `nfs-svm`. Binding is:
+
+| Field | Role |
+|-------|------|
+| `provisioner: csi.trident.netapp.io` | Hand PVCs to Trident CSI |
+| `parameters.backendType: ontap-nas` | Use any online Trident backend with `storageDriverName: ontap-nas` |
+| SC `metadata.name` (`trident-nfs-svm`) | Kubernetes label only — not the ONTAP/Trident backend name |
+
+Lab has a single `ontap-nas` backend (`nfs-svm`), so `backendType: ontap-nas`
+is enough. With multiple `ontap-nas` backends, narrow with Trident `selector`
+/ storage pool parameters (match labels on the backend), or you may get an
+arbitrary eligible backend.
+
+`is-default-class: "true"` makes this the default for PVCs that omit
+`storageClassName` (ensure no other default SC conflicts).
+
+## Trident backend create — pod vs host path to ONTAP
+
+### Symptom
+
+`tridentctl create backend` hangs, then times out talking to Trident’s local REST API:
+
+```text
+Post "http://127.0.0.1:8000/trident/v1/backend": context deadline exceeded
+```
+
+Bastion `tridentctl` does **not** open a socket to ONTAP. It runs
+`oc exec` into the controller and posts to `127.0.0.1:8000` inside the pod.
+Controller logs show `AddBackend` parse the config and resolve
+`managementLIF` → `10.200.0.10`, then stall (no success/fail for that
+request).
+
+NNCP puts `10.200.0.x` on the **node** NIC `ens2f0np0`. The Trident
+controller pod still has only CNI `eth0` (e.g. `10.129.x.x`). Those are
+different network namespaces.
+
+### Host path works (node `e45-h14-000-r650`, IP `10.200.0.28`)
+
+```bash
+oc get pod -n trident -l app=controller.csi.trident.netapp.io -o wide
+# example: controller on e45-h14-000-r650
+
+oc debug node/e45-h14-000-r650 -- chroot /host ip -4 addr show ens2f0np0
+oc debug node/e45-h14-000-r650 -- chroot /host ip route get 10.200.0.10
+# → 10.200.0.10 dev ens2f0np0 src 10.200.0.28
+
+oc debug node/e45-h14-000-r650 -- chroot /host \
+  curl -vk --connect-timeout 5 https://10.200.0.10/api/cluster
+# → TLS OK, HTTP 401 without credentials (API alive)
+```
+
+Do not use ping alone — ONTAP management LIFs often ignore ICMP.
+
+`/api/cluster` needs a **cluster** admin. `vsadmin` is SVM-scoped; test it
+with SVM APIs (e.g. `/api/svm/svms`), not `/api/cluster`.
+
+### Pod path fails (even with `routingViaHost: true`)
+
+OVN setting (cluster-wide):
+
+```bash
+oc patch network.operator cluster --type merge -p \
+  '{"spec":{"defaultNetwork":{"ovnKubernetesConfig":{"gatewayConfig":{"routingViaHost":true}}}}}'
+
+oc get network.operator cluster \
+  -o jsonpath='{.spec.defaultNetwork.ovnKubernetesConfig.gatewayConfig.routingViaHost}{"\n"}'
+# → true
+```
+
+`routingViaHost` does **not** add `ens2f0np0` inside the pod. `ip a` in the
+pod still shows only `eth0`. The change is how OVN hands egress to the
+**host** routing table.
+
+Debug from the controller’s network namespace (ocp-trace image):
+
+```bash
+oc debug -it pod/<trident-controller-pod> \
+  --image=quay.io/rh_ee_lguoqing/ocp-trace:4.22.0 \
+  --target=trident-main \
+  -n trident
+
+# inside debug shell
+curl -vk --connect-timeout 5 https://10.200.0.10/api/cluster
+```
+
+### tcpdump on the storage NIC (while pod curls / create backend runs)
+
+On the node hosting the controller:
+
+```bash
+oc debug node/e45-h14-000-r650 -- chroot /host \
+  tcpdump -i ens2f0np0 -nn host 10.200.0.10 and port 443
+```
+
+Observed (pod egress SNATed to storage IP):
+
+```text
+10.200.0.28 → 10.200.0.10:443  Flags [S]     (SYN out)
+10.200.0.10 → 10.200.0.28      Flags [S.]    (SYN-ACK back)
+… SYN / SYN-ACK retransmits …
+(never an ACK from 10.200.0.28)
+```
+
+Client MSS `1360` matches OVN pod MTU (1400), not a plain host curl.
+
+| Finding | Meaning |
+|---------|---------|
+| SYN leaves `ens2f0np0` as `10.200.0.28` | `routingViaHost` + host route/SNAT to storage NIC work |
+| SYN-ACK returns to `10.200.0.28` | NetApp and L2 are fine |
+| No ACK, handshake never completes | Reply not delivered back into the pod/OVN TCP stack |
+| Host `curl` fully completes TLS + HTTP | Node path OK; only **pod return path** is broken |
+
+### Conclusion
+
+Secondary NIC + CNI pod egress: outbound works, return path into OVN fails.
+`routingViaHost` alone is not enough here.
+
+Practical fixes for Trident controller → `managementLIF`:
+
+1. Run controller with `hostNetwork: true` (lab choice below), or
+2. Multus attachment on `10.200.0.0/24`, or
+3. Further OVN/host tuning (`rp_filter`, forwarding, SNAT) — more fragile for lab use.
+
+NFS data path on workers still relies on node `ens2f0np0` IPs from NNCP
+(CSI node mounts use the host network namespace).
+
+### Fix applied — Trident controller `hostNetwork: true`
+
+Shares the node network namespace (same path as the working host `curl` to
+`10.200.0.10`). Supported on TridentOrchestrator (Trident 25.10+; lab is 26.02.x).
+
+```bash
+oc get tridentorchestrator -A
+# NAME      AGE
+# trident   …
+
+oc patch tridentorchestrator trident --type merge \
+  -p '{"spec":{"hostNetwork":true}}'
+```
+
+Verify the controller rolled and is on host network (still prefer a storage
+worker that has `ens2f0np0` in `10.200.0.0/24`):
+
+```bash
+oc get pod -n trident -l app=controller.csi.trident.netapp.io -o wide
+# example after patch:
+# trident-controller-…   6/6  Running  …  10.1.92.80  e45-h14-000-r650
+# podIP is the node primary IP (not 10.129.x.x OVN)
+
+oc get pod -n trident -l app=controller.csi.trident.netapp.io \
+  -o jsonpath='hostNetwork={.spec.hostNetwork} podIP={.status.podIP} hostIP={.status.hostIP}{"\n"}'
+# → hostNetwork=true  podIP≈hostIP (node address)
+```
+
+`podIP` may be the node’s primary IP (e.g. `10.1.92.80`); traffic to
+`10.200.0.10` still follows the host route out `ens2f0np0` with
+`src 10.200.0.28`.
+
+Retest ONTAP reachability, then create the backend (after confirming SVM name
+— see **Discover SVM name** above):
+
+```bash
+oc debug -it pod/<trident-controller-pod> \
+  --image=quay.io/rh_ee_lguoqing/ocp-trace:4.22.0 \
+  --target=trident-main -n trident
+# inside: curl -vk --connect-timeout 5 https://10.200.0.10/api/cluster
+
+tridentctl -n trident create backend -f trident-ontap-nas-backend.json
+```
+
+Do **not** only `oc patch deployment trident-controller … hostNetwork` — the
+operator may reconcile it away; set it on `TridentOrchestrator` instead.
 
 ## Prerequisite — nmstate operator
 
