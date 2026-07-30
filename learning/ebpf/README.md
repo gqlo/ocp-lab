@@ -36,6 +36,8 @@ Compared to [nettools-fedora](../networking/ocp-network-tracing/) (Fedora toolbo
 - [Run — debug a pod](#run--debug-a-pod)
 - [Run — long-lived pod](#run--long-lived-pod)
 - [Network debugging](#network-debugging)
+  - [Packet capture (`tcpdump`)](#packet-capture-tcpdump)
+  - [Permission denied / restricted PSS](#permission-denied--restricted-pss)
 - [eBPF tracing](#ebpf-tracing)
 - [BCC tools catalog](#bcc-tools-catalog)
   - [Block I/O](#block-io)
@@ -199,6 +201,63 @@ tcpdump -i <veth-or-nic> -nn icmp
 ```
 
 More topology and veth examples: [OpenShift network tracing](../networking/ocp-network-tracing/ocp-net-tracing.md).
+
+### Permission denied / restricted PSS
+
+Ephemeral `kubectl debug --target=…` often **cannot** run `tcpdump` when the target pod (or namespace) is under **PodSecurity restricted**:
+
+```text
+tcpdump: eth0: You don't have permission to capture on that device
+(socket: Operation not permitted)
+```
+
+`--custom` with `runAsUser: 0` + `NET_RAW`/`NET_ADMIN` is usually blocked by the same policy:
+
+```text
+Warning: would violate PodSecurity "restricted:latest": ... runAsUser=0 ...
+  ... must not include "NET_ADMIN", "NET_RAW", "SYS_PTRACE" ...
+```
+
+`ip a` in the debug shell still works (shared netns). Capture needs privileges that ephemeral debug cannot get.
+
+**Workaround — `podman` on the node**, attach ocp-trace to the target container’s netns. RHCOS itself has no `tcpdump`; run the image into `/proc/<pid>/ns/net`.
+
+Step by step:
+
+```bash
+# 1) From your laptop — identify node + compute (or target) container ID
+NS=<namespace>
+POD=<pod-name>
+CONTAINER=<container-name>   # e.g. compute for virt-launcher
+NODE=$(oc get pod -n "$NS" "$POD" -o jsonpath='{.spec.nodeName}')
+CRIID=$(oc get pod -n "$NS" "$POD" \
+  -o jsonpath="{.status.containerStatuses[?(@.name==\"$CONTAINER\")].containerID}" \
+  | sed 's|cri-o://||')
+
+# 2) Debug onto the node, then enter the host rootfs
+oc debug node/"$NODE"
+chroot /host
+
+# 3) Resolve the container PID (CRI-O)
+PID=$(crictl inspect "$CRIID" | python3 -c 'import json,sys; print(json.load(sys.stdin)["info"]["pid"])')
+echo "PID=$PID"
+
+# 4) Run ocp-trace with NET_RAW/NET_ADMIN into that netns
+podman run --rm -it \
+  --cap-add=NET_RAW --cap-add=NET_ADMIN \
+  --network=ns:/proc/${PID}/ns/net \
+  quay.io/rh_ee_lguoqing/ocp-trace:4.22.0 \
+  tcpdump -i eth0 tcp port 22 -vv
+```
+
+Example filter variants inside the same `podman run …` command:
+
+```bash
+tcpdump -ni eth0 host <pod-ip> and tcp port 22 -vv
+tcpdump -i eth0 -nn -vv 'port 53 or port 5353'
+```
+
+KubeVirt masquerade lab that hit this path: [kubevirt-vm-ssh-trace](../networking/kubevirt-vm-ssh-trace/kubevirt-vm-ssh-trace.md).
 
 ### DNS and connectivity
 
