@@ -242,19 +242,34 @@ chroot /host
 PID=$(crictl inspect "$CRIID" | python3 -c 'import json,sys; print(json.load(sys.stdin)["info"]["pid"])')
 echo "PID=$PID"
 
-# 4) Run ocp-trace with NET_RAW/NET_ADMIN into that netns
+# 4) Enter the netns (shell), then run tcpdump
 podman run --rm -it \
   --cap-add=NET_RAW --cap-add=NET_ADMIN \
   --network=ns:/proc/${PID}/ns/net \
   quay.io/rh_ee_lguoqing/ocp-trace:4.22.0 \
-  tcpdump -i eth0 tcp port 22 -vv
+  bash
+
+# inside the container:
+ip -br addr
+tcpdump -ni eth0 tcp port 22 -vv
 ```
 
-Example filter variants inside the same `podman run …` command:
+One-shot (no interactive shell):
+
+```bash
+podman run --rm -it \
+  --cap-add=NET_RAW --cap-add=NET_ADMIN \
+  --network=ns:/proc/${PID}/ns/net \
+  quay.io/rh_ee_lguoqing/ocp-trace:4.22.0 \
+  tcpdump -ni eth0 tcp port 22 -vv
+```
+
+Example filters:
 
 ```bash
 tcpdump -ni eth0 host <pod-ip> and tcp port 22 -vv
 tcpdump -i eth0 -nn -vv 'port 53 or port 5353'
+tcpdump -ni tap0 tcp port 22 -vv          # e.g. virtctl ssh path
 ```
 
 KubeVirt masquerade lab that hit this path: [kubevirt-vm-ssh-trace](../networking/kubevirt-vm-ssh-trace/kubevirt-vm-ssh-trace.md).
