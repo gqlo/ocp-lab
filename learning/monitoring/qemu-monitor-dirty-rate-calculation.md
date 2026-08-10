@@ -8,9 +8,9 @@ How guest memory dirty rate is measured via the QEMU monitor (QMP), how `virsh q
 
 **Dirty rate** is how fast the guest is rewriting RAM, in **MiB/s** (or bytes/s after conversion):
 
-\[
+$$
 \text{dirty rate} \approx \frac{\text{(pages written at least once in window } T) \times \text{page size}}{T}
-\]
+$$
 
 Important:
 
