@@ -773,7 +773,7 @@
                 "uid": "PF55DCC5EC58ABF5A"
               },
               "editorMode": "code",
-              "expr": "sum(container_memory_rss{pod!~\"virt-launcher.*\", namespace=\"openshift-cnv\" }) by (pod)",
+              "expr": "sum(container_memory_rss{pod!~\"virt-launcher.*\", namespace=\"openshift-cnv\", container!=\"\"}) by (pod)",
               "legendFormat": "{{vmi}}",
               "range": true,
               "refId": "A"
@@ -872,7 +872,7 @@
                 "uid": "PF55DCC5EC58ABF5A"
               },
               "editorMode": "code",
-              "expr": "sum(rate(container_cpu_usage_seconds_total{pod!~\"virt-launcher.*\", namespace=\"openshift-cnv\"}[1m])) by (pod)",
+              "expr": "sum(rate(container_cpu_usage_seconds_total{pod!~\"virt-launcher.*\", namespace=\"openshift-cnv\", container!=\"\"}[1m])) by (pod)",
               "legendFormat": "{{vmi}}",
               "range": true,
               "refId": "A"
@@ -971,7 +971,7 @@
                 "uid": "PF55DCC5EC58ABF5A"
               },
               "editorMode": "code",
-              "expr": "label_replace(sum(container_memory_rss{pod=~\"virt-launcher.*\"}) by (pod), \"vmi\", \"$1\", \"pod\", \"virt-launcher-(.*)-[^-]+$\")",
+              "expr": "label_replace(sum(container_memory_rss{pod=~\"virt-launcher.*\", container!=\"\"}) by (pod), \"vmi\", \"$1\", \"pod\", \"virt-launcher-(.*)-[^-]+$\")",
               "legendFormat": "{{vmi}}",
               "range": true,
               "refId": "A"
@@ -1068,7 +1068,7 @@
                 "uid": "PF55DCC5EC58ABF5A"
               },
               "editorMode": "code",
-              "expr": "label_replace(sum(rate(container_cpu_usage_seconds_total{pod=~\"virt-launcher.*\"}[1m])) by (pod),\"vmi\", \"$1\", \"pod\", \"virt-launcher-(.*)-[^-]+$\")",
+              "expr": "label_replace(sum(rate(container_cpu_usage_seconds_total{pod=~\"virt-launcher.*\", container!=\"\"}[1m])) by (pod),\"vmi\", \"$1\", \"pod\", \"virt-launcher-(.*)-[^-]+$\")",
               "legendFormat": "{{vmi}}",
               "range": true,
               "refId": "A"

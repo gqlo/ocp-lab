@@ -530,7 +530,7 @@
             "uid": "PF55DCC5EC58ABF5A"
           },
           "editorMode": "code",
-          "expr": "label_replace(sum(container_memory_rss{pod=~\"rook-ceph-osd-(\\\\d+).*\"}) by (pod), \"osd_label\", \"osd-$1\", \"pod\", \"rook-ceph-osd-(\\\\d+).*\") / 1024 / 1024 / 1024",
+          "expr": "label_replace(sum(container_memory_rss{pod=~\"rook-ceph-osd-(\\\\d+).*\", container!=\"\"}) by (pod), \"osd_label\", \"osd-$1\", \"pod\", \"rook-ceph-osd-(\\\\d+).*\") / 1024 / 1024 / 1024",
           "legendFormat": "{{osd_label}}",
           "range": true,
           "refId": "A"
@@ -653,7 +653,7 @@
             "uid": "PF55DCC5EC58ABF5A"
           },
           "editorMode": "code",
-          "expr": "label_replace(sum(rate(container_cpu_usage_seconds_total{pod=~\"rook-ceph-osd-(\\\\d+).*\"}[1m])) by (pod), \"osd_label\", \"osd-$1\", \"pod\", \"rook-ceph-osd-(\\\\d+).*\")",
+          "expr": "label_replace(sum(rate(container_cpu_usage_seconds_total{pod=~\"rook-ceph-osd-(\\\\d+).*\", container!=\"\"}[1m])) by (pod), \"osd_label\", \"osd-$1\", \"pod\", \"rook-ceph-osd-(\\\\d+).*\")",
           "legendFormat": "{{osd_label}}",
           "range": true,
           "refId": "A"
@@ -1343,7 +1343,7 @@
                 "uid": "PF55DCC5EC58ABF5A"
               },
               "editorMode": "code",
-              "expr": "label_replace(sum(container_memory_rss{pod=~\"virt-launcher.*\"}) by (pod), \"vmi\", \"$1\", \"pod\", \"virt-launcher-(.*)-[^-]+$\") / 1024 / 1024 / 1024 ",
+              "expr": "label_replace(sum(container_memory_rss{pod=~\"virt-launcher.*\", container!=\"\"}) by (pod), \"vmi\", \"$1\", \"pod\", \"virt-launcher-(.*)-[^-]+$\") / 1024 / 1024 / 1024 ",
               "legendFormat": "{{vmi}}",
               "range": true,
               "refId": "A"
@@ -1462,7 +1462,7 @@
                 "uid": "PF55DCC5EC58ABF5A"
               },
               "editorMode": "code",
-              "expr": "label_replace(sum(rate(container_cpu_usage_seconds_total{pod=~\"virt-launcher.*\"}[1m])) by (pod),\"vmi\", \"$1\", \"pod\", \"virt-launcher-(.*)-[^-]+$\")",
+              "expr": "label_replace(sum(rate(container_cpu_usage_seconds_total{pod=~\"virt-launcher.*\", container!=\"\"}[1m])) by (pod),\"vmi\", \"$1\", \"pod\", \"virt-launcher-(.*)-[^-]+$\")",
               "legendFormat": "{{vmi}}",
               "range": true,
               "refId": "A"
