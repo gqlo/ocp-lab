@@ -48,19 +48,83 @@ Notes:
 - Either HA replica (`prometheus-k8s-0` or `-1`) is fine; each has its own local head and counts can differ slightly.
 - Without `?limit=…`, Prometheus returns only **10** rows. `jq '.[ :20]'` cannot invent rows the API did not send.
 
-Also useful from the same response:
+### Total active series (all metrics)
+
+`headStats.numSeries` is the **total number of active time series** in this Prometheus pod’s head (every metric name combined — not “samples over retention”).
 
 ```bash
 oc exec -n openshift-monitoring prometheus-k8s-0 -c prometheus -- \
-  curl -s 'http://localhost:9090/api/v1/status/tsdb?limit=20' \
+  curl -s 'http://localhost:9090/api/v1/status/tsdb' \
+| jq '.data.headStats.numSeries'
+```
+
+Example from this cluster:
+
+```text
+14522167
+```
+
+Full head block stats (series + chunks + time range):
+
+```bash
+oc exec -n openshift-monitoring prometheus-k8s-0 -c prometheus -- \
+  curl -s 'http://localhost:9090/api/v1/status/tsdb' \
 | jq '.data.headStats'
 ```
 
-`headStats.numSeries` is the total number of series in the head.
+| Want | Query / field |
+| ---- | ------------- |
+| Total **series** now | `headStats.numSeries` (above) — here **~14.5M** |
+| Top series by **metric name** | `seriesCountByMetricName` (`?limit=20`) |
+| Samples in **last scrape** | `sum(scrape_samples_scraped)` |
+| Samples **appended** over time | `prometheus_tsdb_head_samples_appended_total` (counter) |
+
+PromQL equivalent for total series (can be expensive at this scale; prefer TSDB API):
+
+```promql
+count({__name__=~".+"})
+```
+
+### Verify: do per-metric counts add up to `numSeries`?
+
+List as many metric names as the API allows (`limit` max **10000**) and compare their sum to `headStats.numSeries`:
+
+```bash
+oc exec -n openshift-monitoring prometheus-k8s-0 -c prometheus -- \
+  curl -s 'http://localhost:9090/api/v1/status/tsdb?limit=10000' \
+| jq '{
+    numSeries: .data.headStats.numSeries,
+    listedMetrics: (.data.seriesCountByMetricName | length),
+    sumOfListed: ([.data.seriesCountByMetricName[].value] | add),
+    diff: (.data.headStats.numSeries - ([.data.seriesCountByMetricName[].value] | add))
+  }'
+```
+
+| Field | Meaning |
+| ----- | ------- |
+| `numSeries` | Total active series in the head |
+| `listedMetrics` | How many metric **names** the API returned |
+| `sumOfListed` | Sum of series counts for those names |
+| `diff` | `numSeries - sumOfListed` |
+
+Interpretation:
+
+- **`diff` ≈ 0** → listed per-metric counts account for the head total.
+- **`listedMetrics` == 10000** and **`diff` still large** → more than 10k distinct metric names exist; the API truncated the list, so the sum cannot cover everything.
+- Dump the full returned list (sorted):  
+
+```bash
+oc exec -n openshift-monitoring prometheus-k8s-0 -c prometheus -- \
+  curl -s 'http://localhost:9090/api/v1/status/tsdb?limit=10000' \
+| jq -r '.data.seriesCountByMetricName[] | "\(.value)\t\(.name)"' \
+| sort -nr
+```
 
 ---
 
 ## 2. Example result (large Virt / dense cluster)
+
+Same cluster as above: **`headStats.numSeries` ≈ 14,522,167** (~14.5M active series). Top metric names below are the largest contributors; even #1 (`container_blkio_…` ≈ 421k) is only a few percent of the total.
 
 Captured from cluster Prometheus (`limit=20`):
 

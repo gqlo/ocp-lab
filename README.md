@@ -9,7 +9,7 @@ A collection of learning materials, scripts, and templates for OCP. Includes han
 | eBPF / ocp-trace | [eBPF and debugging (ocp-trace)](learning/ebpf/README.md) |
 | Ceph — storage | [PVC vs snapshot vs clone](learning/ceph/pvc-vs-snapshot-clone.md) |
 | NetApp — storage | [Trident NFS SVM setup notes](learning/netapp/netapp-setup-notes.md) |
-| Monitoring | [Kernel `/proc/diskstats`](learning/monitoring/kernel-proc-diskstats.md) |
+| Monitoring | [Monitoring catalog](learning/monitoring/README.md) (Prometheus series count, KME + COO, diskstats) |
 | Networking — tracing | [OpenShift network tracing](learning/networking/ocp-network-tracing/ocp-net-tracing.md) |
 | Networking — single-node tracing | [Single-node OpenShift network tracing](learning/networking/single-node-ocp-network-tracking/single-node-ocp-net-tracing.md) |
 | Networking — DNS | [DNS resolution debugging](learning/networking/dns-resolution-issue/dns-resolution-error.md) |
