@@ -7,11 +7,18 @@ Lab notes from a stuck worker MachineConfig rollout on a large ODF cluster
 
 ## Lesson (short)
 
-Drain cannot finish until Ceph OSD/mon pods are allowed to evict, and their PDBs
-only permit one disruption at a time. MCP `maxUnavailable` only controls how many
-nodes are cordoned in parallel — it does **not** raise the Ceph PDB limit. Setting
-it to **40** makes things worse: many drains wait on one Pending pinned OSD/mon and
-hit the 1h drain timeout.
+Drain cannot finish until Ceph OSD/mon pods are allowed to evict. MCP
+`maxUnavailable` only controls how many nodes are cordoned in parallel — it does
+**not** raise Ceph disruption budgets.
+
+With ODF pools using failure domain `zone`, Rook should create zone-scoped OSD PDBs
+during disruption handling (for example `rook-ceph-osd-zone-<zone>`). In this lab
+incident, those zone PDBs were **not** created after we manually patched the global
+OSD PDB (`rook-ceph-osd`), so drain behavior stayed tied to the global PDB path.
+
+If the cluster is stuck in the default/idle phase (`rook-ceph-osd` budget consumed),
+setting MCP to **40** makes things worse: many drains wait on one Pending pinned
+OSD/mon and hit the 1h drain timeout.
 
 ## Two different knobs
 
@@ -40,12 +47,6 @@ Evicting an OSD only checks the OSD PDB; evicting a mon only checks the mon PDB.
 right now — not “zero pods may be down.” If one OSD is already Pending/not Ready,
 the OSD budget is already spent.
 
-Refs:
-
-- [Kubernetes disruptions / PDB](https://kubernetes.io/docs/concepts/workloads/pods/disruptions/)
-- [PDB API (`disruptionsAllowed`)](https://kubernetes.io/docs/reference/kubernetes-api/policy-resources/pod-disruption-budget-v1/)
-- [Rook managed OSD PDBs (design)](https://github.com/rook/rook/blob/master/design/ceph/ceph-managed-disruptionbudgets.md)
-
 ## Why Ceph pods gate the drain
 
 OSD and mon Deployments are **hostname-pinned** (hostPath data under
@@ -67,39 +68,6 @@ Mon-a may also have required node affinity for
 `cluster.ocs.openshift.io/openshift-storage` plus a storage taint toleration; the
 **hostname selector** is what prevents scheduling on any other Ready node.
 
-## The Pending trap
-
-```text
-1. Cordon node A (MCO or oc adm cordon)
-2. Evict OSD-A  →  uses the one OSD PDB slot (ALLOWED → 0)
-3. Replacement must run on A (nodeSelector)
-4. A still unschedulable → OSD-A stays Pending
-5. ALLOWED stays 0 → cannot evict OSDs on other cordoned nodes
-6. Those drains retry until “failed to drain after 1 hour”
-```
-
-Same pattern for mon-a on its home node (separate mon PDB).
-
-Find who holds the budget:
-
-```bash
-oc get pdb -n openshift-storage
-oc get pods -n openshift-storage -l app=rook-ceph-osd --field-selector=status.phase=Pending -o wide
-oc get pods -n openshift-storage -l app=rook-ceph-mon --field-selector=status.phase!=Running -o wide
-
-# Pending OSD → home node
-oc get deploy -n openshift-storage rook-ceph-osd-<id> \
-  -o jsonpath='{.spec.template.spec.nodeSelector.kubernetes\.io/hostname}{"\n"}'
-oc get node <hostname>
-```
-
-Break the trap: **uncordon the Pending pod’s home** so it becomes Running/Ready,
-then `ALLOWED` can return to 1.
-
-`oc adm uncordon` alone does **not** mark the MachineConfig update done. If
-`currentConfig ≠ desiredConfig` and the MCP is not paused, MCO will **re-cordon**
-the node and drain again (mon-a “keeps Pending”).
-
 ## Why `maxUnavailable: 40` is not helping
 
 MCO with 40:
@@ -117,7 +85,7 @@ Then:
 
 `maxUnavailable: 5` can look fine because the blast radius is small: a few waiters
 often get the slot after the first node reboots within the 1h window. **40** creates
-enough waiters and failed drains that the Pending trap locks progress.
+enough waiters and failed drains that progress stalls.
 
 MCP 40 does **not** mean “40 OSDs may go down.”
 
@@ -138,9 +106,25 @@ rook-ceph-osd   maxUnavailable=1
 ```
 
 After a clean drain starts and an OSD is down in one failure domain, Rook may
-**delete** the default PDB and create **blocking** PDBs on other domains
-(`rook-ceph-osd-zone-zone2`, …) so more OSDs in the draining zone can go down.
-When healthy, it restores the default PDB.
+**delete** the default PDB and create zone PDBs (`rook-ceph-osd-zone-zone2`, …).
+This is the expected behavior for zone failure domains.
+
+Important clarification: by default we do **not** set a custom per-zone
+`maxUnavailable` for these zone PDBs. They are generated and managed by Rook based
+on cluster state, then removed/restored as health recovers.
+
+What happened here: after manually patching the global OSD PDB (`rook-ceph-osd`),
+Rook did not create the expected `rook-ceph-osd-zone-*` PDBs, so updates continued
+to depend on the global PDB budget only.
+
+To increase operator verbosity during investigation:
+
+```bash
+kubectl -n openshift-storage patch configmap rook-ceph-operator-config --type merge -p '{"data":{"ROOK_LOG_LEVEL":"DEBUG"}}'
+```
+
+Additional operator debug logs are needed to fully explain why zone PDB behavior
+did not transition as expected in this scenario.
 
 Seeing only `rook-ceph-osd` with `ALLOWED: 0` means you are still in the default
 phase (or stuck before unlock) — not that dynamic PDBs are disabled.
@@ -228,39 +212,40 @@ oc patch pdb rook-ceph-mgr-pdb -n openshift-storage --type=merge \
 # if you disabled managePodBudgets, set it back to true
 ```
 
-## Practical recovery
+## Incident note: final stuck node
 
-```bash
-# 1) Stop the siege
-oc patch mcp worker --type=merge -p '{"spec":{"paused":true,"maxUnavailable":1}}'
+During this incident, several workers remained `SchedulingDisabled` late in the
+rollout, mostly in `zone3` (with one in `zone2`), for example:
 
-# 2) Free PDB budgets — uncordon homes of Pending mon/OSD
-oc adm uncordon <osd-home> <mon-home>
-
-# 3) Wait until pods Ready and PDB ALLOWED >= 1
-oc get pdb -n openshift-storage
-oc get pods -n openshift-storage -l 'app in (rook-ceph-osd,rook-ceph-mon)' | grep -v Running
-
-# 4) Optional: uncordon leftover SchedulingDisabled workers
-oc get nodes --no-headers | awk '/SchedulingDisabled/{print $1}' | xargs -r oc adm uncordon
-
-# 4.1) List still-cordoned nodes (unschedulable=true) with zone
-oc get nodes -o custom-columns=NAME:.metadata.name,UNSCHEDULABLE:.spec.unschedulable,ZONE:.metadata.labels.topology\\.kubernetes\\.io/zone --no-headers | awk '$2=="true"'
-
-# 5) Resume with low parallelism
-oc patch mcp worker --type=merge -p '{"spec":{"paused":false}}'
+```text
+NAME               ZONE    SCHED_DISABLED
+e40-h28-000-r650   zone2   true
+e40-h34-000-r650   zone3   true
+e40-h37-000-r650   zone3   true
+e41-h01-000-r650   zone3   true
+e41-h02-000-r650   zone3   true
+e41-h05-000-r650   zone3   true
+e41-h06-000-r650   zone3   true
+e41-h07-000-r650   zone3   true
+e41-h09-000-r650   zone3   true
+e41-h10-000-r650   zone3   true
+e41-h11-000-r650   zone3   true
+e41-h13-000-r650   zone3   true
+e41-h15-000-r650   zone3   true
+e42-h28-000-r650   zone3   true
+e42-h29-000-r650   zone3   true
 ```
 
-Watch progress:
+The **last** node that remained stuck was due to a hardware fault, not ODF PDB
+logic:
 
-```bash
-oc get mcp worker
-oc get nodes | grep -c SchedulingDisabled
-oc get pdb -n openshift-storage
+```text
+A fatal error was detected on a component at bus 151 device 2 function 0.
+Tue Aug 11 2026 20:13:35
 ```
 
-Healthy serial pattern: one node `NotReady` (reboot), OSD PDB `ALLOWED` flips
-`0 → 1 → 0`, `UPDATEDMACHINECOUNT` climbs.
+This should be treated as a node hardware remediation path separate from Ceph/Rook
+PDB behavior.
 
 ## Guidance for this fleet
 
@@ -278,3 +263,9 @@ parallel OSD evictions are safe or allowed by the default PDB.
 
 - [Rook ceph-managed-disruptionbudgets.md](https://github.com/rook/rook/blob/master/design/ceph/ceph-managed-disruptionbudgets.md)
 - [High-scale ODF / drain notes](../ocp-admin/high-scale-config-notes.md) (~5 parallel drains)
+
+## Refs
+
+- [Kubernetes disruptions / PDB](https://kubernetes.io/docs/concepts/workloads/pods/disruptions/)
+- [PDB API (`disruptionsAllowed`)](https://kubernetes.io/docs/reference/kubernetes-api/policy-resources/pod-disruption-budget-v1/)
+- [Rook managed OSD PDBs (design)](https://github.com/rook/rook/blob/master/design/ceph/ceph-managed-disruptionbudgets.md)
