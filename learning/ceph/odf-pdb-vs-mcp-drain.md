@@ -1,9 +1,29 @@
 # ODF / Rook PDBs vs MCP `maxUnavailable` (node drain)
 
-**Last Updated:** 2026-08-11
+**Last Updated:** 2026-08-12 (MCO zone-order reboot notes)
 
 Lab notes from a stuck worker MachineConfig rollout on a large ODF cluster
 (~222 OSDs, 1 OSD per node, replica 3 / failure domain `zone`).
+
+## Catalog
+
+- [Lesson (short)](#lesson-short)
+- [Two different knobs](#two-different-knobs)
+- [MCO reboot / drain rollout](#mco-reboot--drain-rollout)
+  - [Trigger a worker-pool reboot (rolling)](#trigger-a-worker-pool-reboot-rolling)
+  - [Zone ordering (MCO is zone-aware)](#zone-ordering-mco-is-zone-aware)
+  - [Single-node drain / reboot / uncordon](#single-node-drain--reboot--uncordon)
+- [Why Ceph pods gate the drain](#why-ceph-pods-gate-the-drain)
+- [Why `maxUnavailable: 40` is not helping](#why-maxunavailable-40-is-not-helping)
+- [Rook “dynamic” OSD PDBs (already on ODF)](#rook-dynamic-osd-pdbs-already-on-odf)
+  - [Rook operator log level (DEBUG)](#rook-operator-log-level-debug)
+- [Lab change: manually raised PDB budgets (2026-08-11)](#lab-change-manually-raised-pdb-budgets-2026-08-11)
+- [Incident note: final stuck node](#incident-note-final-stuck-node)
+- [Guidance for this fleet](#guidance-for-this-fleet)
+- [Related](#related)
+- [Refs](#refs)
+
+---
 
 ## Lesson (short)
 
@@ -46,6 +66,76 @@ Evicting an OSD only checks the OSD PDB; evicting a mon only checks the mon PDB.
 `ALLOWED DISRUPTIONS: 0` means **no additional voluntary eviction** for that PDB
 right now — not “zero pods may be down.” If one OSD is already Pending/not Ready,
 the OSD budget is already spent.
+
+## MCO reboot / drain rollout
+
+### Trigger a worker-pool reboot (rolling)
+
+```bash
+oc adm reboot-machine-config-pool mcp/worker
+```
+
+Watch progress:
+
+```bash
+oc get mcp worker
+oc get mcn -n openshift-machine-config-operator
+
+# Cordoned nodes (SchedulingDisabled) with zone label
+oc get nodes -L topology.kubernetes.io/zone | grep -i SchedulingDisabled
+```
+
+### Zone ordering (MCO is zone-aware)
+
+MCO does **not** pick nodes at random. After a machine config change it updates
+nodes in this order ([Red Hat machine configuration docs](https://docs.redhat.com/en/documentation/openshift_container_platform/4.18/html/machine_configuration/mco-coreos-layering)):
+
+1. **Alphabetically by `topology.kubernetes.io/zone`** (e.g. `zone1` → `zone2` → `zone3`)
+2. **Oldest nodes first** within each zone
+3. Up to **`maxUnavailable`** nodes in parallel per batch
+
+With `maxUnavailable: 1`, rollout is effectively **one zone at a time** (starting
+with the alphabetically first zone). With `maxUnavailable: 5` on this fleet (~70+
+nodes per zone), early batches usually stay within the current zone; a batch can
+**spill into the next zone** only if fewer nodes remain in the current zone than
+`maxUnavailable`.
+
+MCO zone ordering is independent of Rook/Ceph PDB limits — Ceph can still block
+individual drains even when MCO has cordoned the “right” zone-ordered node.
+
+Check zone labels and rollout order:
+
+```bash
+oc get nodes -l node-role.kubernetes.io/worker= \
+  -L topology.kubernetes.io/zone --no-headers | sort -k2,2 -k1,1
+
+oc get mcp worker -o jsonpath='maxUnavailable={.spec.maxUnavailable}{"\n"}'
+
+oc get mcn -n openshift-machine-config-operator \
+  -o custom-columns=NAME:.metadata.name,ZONE:.metadata.labels.topology\.kubernetes\.io/zone,UPDATED:.status.conditions[?(@.type==\"Updated\")].status
+
+# Currently cordoned nodes with zone (after drain or during MCO rollout)
+oc get nodes -L topology.kubernetes.io/zone | grep -i SchedulingDisabled
+```
+
+### Single-node drain / reboot / uncordon
+
+```bash
+# Drain one node (leaves it SchedulingDisabled until uncordoned)
+oc adm drain e40-h28-000-r650 \
+  --ignore-daemonsets --delete-emptydir-data --grace-period=300 --timeout=1h
+
+# Reboot without SSH (after drain)
+oc debug node/e40-h28-000-r650 -- chroot /host reboot
+
+# Or all-in-one (if supported on your OCP version)
+oc adm reboot-node e40-h28-000-r650
+
+# Re-enable scheduling when done
+oc adm uncordon e40-h28-000-r650
+```
+
+`oc adm drain` and MCO-managed drains **do not** auto-uncordon when finished.
 
 ## Why Ceph pods gate the drain
 
@@ -117,10 +207,34 @@ What happened here: after manually patching the global OSD PDB (`rook-ceph-osd`)
 Rook did not create the expected `rook-ceph-osd-zone-*` PDBs, so updates continued
 to depend on the global PDB budget only.
 
-To increase operator verbosity during investigation:
+### Rook operator log level (DEBUG)
+
+Check current level (`ROOK_LOG_LEVEL` missing → default **INFO**):
 
 ```bash
-kubectl -n openshift-storage patch configmap rook-ceph-operator-config --type merge -p '{"data":{"ROOK_LOG_LEVEL":"DEBUG"}}'
+kubectl -n openshift-storage get configmap rook-ceph-operator-config \
+  -o jsonpath='{.data.ROOK_LOG_LEVEL}{"\n"}'
+```
+
+Enable DEBUG during investigation:
+
+```bash
+kubectl -n openshift-storage patch configmap rook-ceph-operator-config --type merge \
+  -p '{"data":{"ROOK_LOG_LEVEL":"DEBUG"}}'
+```
+
+Revert when done (remove the key so it returns to default INFO):
+
+```bash
+kubectl -n openshift-storage patch configmap rook-ceph-operator-config --type json \
+  -p '[{"op":"remove","path":"/data/ROOK_LOG_LEVEL"}]'
+```
+
+Or set INFO explicitly:
+
+```bash
+kubectl -n openshift-storage patch configmap rook-ceph-operator-config --type merge \
+  -p '{"data":{"ROOK_LOG_LEVEL":"INFO"}}'
 ```
 
 Additional operator debug logs are needed to fully explain why zone PDB behavior
@@ -263,9 +377,11 @@ parallel OSD evictions are safe or allowed by the default PDB.
 
 - [Rook ceph-managed-disruptionbudgets.md](https://github.com/rook/rook/blob/master/design/ceph/ceph-managed-disruptionbudgets.md)
 - [High-scale ODF / drain notes](../ocp-admin/high-scale-config-notes.md) (~5 parallel drains)
+- [MCO node update ordering by zone (PR #3009)](https://github.com/openshift/machine-config-operator/pull/3009)
 
 ## Refs
 
 - [Kubernetes disruptions / PDB](https://kubernetes.io/docs/concepts/workloads/pods/disruptions/)
 - [PDB API (`disruptionsAllowed`)](https://kubernetes.io/docs/reference/kubernetes-api/policy-resources/pod-disruption-budget-v1/)
 - [Rook managed OSD PDBs (design)](https://github.com/rook/rook/blob/master/design/ceph/ceph-managed-disruptionbudgets.md)
+- [OpenShift MCO node update order (alphabetical by zone, oldest first)](https://docs.redhat.com/en/documentation/openshift_container_platform/4.18/html/machine_configuration/mco-coreos-layering)
