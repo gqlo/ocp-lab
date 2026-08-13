@@ -16,6 +16,7 @@ Operational tweaks and queries for the CNV high-scale / ODF test cluster. See al
   - [Zap disks before ODF install](#zap-disks-before-odf-install)
   - [CSI Addons controller manager (memory)](#csi-addons-controller-manager-memory)
   - [OCS metrics exporter (memory)](#ocs-metrics-exporter-memory)
+  - [Rook operator (memory)](#rook-operator-memory)
   - [OSD CPU and memory](#osd-cpu-and-memory)
   - [Ceph block pool PG tuning](#ceph-block-pool-pg-tuning)
   - [Default StorageClass for CNV](#default-storageclass-for-cnv)
@@ -323,6 +324,55 @@ The pod runs **3/3** containers; if OOM persists, apply the same patch to
 `oc edit deployment ocs-metrics-exporter -n openshift-storage`. OCS may reconcile
 and revert manual patches on upgrade.
 
+### Rook operator (memory)
+
+At high scale (~240 nodes, 222 OSDs), `rook-ceph-operator` can get OOMKilled under its
+default **512Mi** limit. `oc describe pod` on the operator shows:
+
+```
+Last State:     Terminated
+  Reason:       OOMKilled
+  Exit Code:    137
+```
+
+This tends to happen during a large reconcile — the previous-container logs
+(`oc logs <pod> --previous`) typically show something like `N of N OSD Deployments need
+update` immediately before the kill, alongside full node-topology validation across
+every zone.
+
+Unlike `csi-addons-controller-manager` / `ocs-metrics-exporter` (owned by the
+`StorageCluster`), the `rook-ceph-operator` Deployment is owned by its **CSV**
+(`ClusterServiceVersion`, via OLM). Patching the Deployment directly gets reverted
+within seconds — patch the **CSV** instead:
+
+```bash
+# Find the active CSV name
+oc get csv -n openshift-storage | grep rook-ceph-operator
+
+# Patch memory limit on the CSV (deployment index 0 -> container index 0 —
+# verify indexes if the CSV layout differs)
+oc patch csv rook-ceph-operator.v4.22.0-rhodf -n openshift-storage --type=json -p='[
+  {"op": "replace", "path": "/spec/install/spec/deployments/0/spec/template/spec/containers/0/resources/limits/memory", "value": "2G"}
+]'
+```
+
+OLM propagates the CSV change to the Deployment and rolls a new pod automatically — no
+separate rollout needed. Verify:
+
+```bash
+oc get deployment rook-ceph-operator -n openshift-storage \
+  -o jsonpath='{.spec.template.spec.containers[0].resources.limits.memory}{"\n"}'
+
+oc get pods -n openshift-storage -l app=rook-ceph-operator
+```
+
+**Caveat:** the patch lives on the version-specific CSV object
+(`rook-ceph-operator.v4.22.0-rhodf`). An ODF/Rook operator upgrade installs a *new* CSV
+without this patch — but `monitoring/scripts/odf-deployment-memory-watch.sh`
+(`CSV_TARGETS`) now re-resolves the active `Succeeded`-phase CSV by name prefix every
+cycle and re-patches it automatically, so this survives upgrades without manual
+intervention as long as the watcher keeps running.
+
 ### OSD CPU and memory
 
 Patch **`spec.storageDeviceSets[0].resources`** on the StorageCluster. The OCS operator
@@ -527,6 +577,7 @@ is the cluster default. Use the cluster-default patch above when PVCs without
 |-------|----------------|
 | `csi-addons-controller-manager` CrashLoop | Patch deployment memory (see above) |
 | `ocs-metrics-exporter` OOMKilled | Patch deployment memory to 512M (see above) |
+| `rook-ceph-operator` OOMKilled | Patch the CSV memory limit, not the Deployment (see above) |
 | Ceph slow / `PausedIOError` on VMs | Check `ceph status`, OSD pods on affected node |
 | PG backfill after `pg_num` change | Normal during rebalance; watch `ceph -s` until `active+clean` |
 
