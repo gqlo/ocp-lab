@@ -296,22 +296,60 @@ ISO-sized region is written.
 
 ### 4 — Optional: dry-run boot in QEMU
 
-Boot the **whole disk** so firmware sees GPT + partition 1:
+Fedora/CSB installers are **UEFI-only**. QEMU defaults to legacy BIOS (SeaBIOS), which shows
+`Booting from Hard Disk...` and never reaches the installer. Pass **OVMF** firmware and boot
+**`${USB}1`** (the partition that received `dd`), not the whole disk.
+
+Prepare writable UEFI variables once per host (copy from the read-only template):
 
 ```bash
-USB=/dev/sdc
-
-sudo qemu-system-x86_64 \
-  -machine q35 -m 4096 -smp 2 \
-  -drive if=none,id=usb,file=$USB,format=raw,readonly=on \
-  -device qemu-xhci -device usb-storage,drive=usb,bootindex=1 \
-  -boot menu=on
+cp /usr/share/OVMF/OVMF_VARS.fd /tmp/OVMF_VARS.fd
 ```
 
-Add `-enable-kvm` if your CPU supports it. A GRUB/Fedora menu means the stick is bootable.
-A `grub>` prompt is also a good sign for this layout — use the
+Boot the installer partition:
+
+```bash
+USB=/dev/sdc    # confirm with lsblk first
+
+sudo umount ${USB}* 2>/dev/null
+
+sudo qemu-system-x86_64 \
+  -enable-kvm \
+  -machine q35 \
+  -m 4096 -smp 2 \
+  -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE.fd \
+  -drive if=pflash,format=raw,file=/tmp/OVMF_VARS.fd \
+  -drive if=virtio,file=${USB}1,format=raw,readonly=on \
+  -boot order=c
+```
+
+If the GRUB/Fedora menu appears, the stick is bootable. A `grub>` prompt can still be a good
+sign for this layout — use the
 [GRUB `configfile` workaround](#grub-configfile-workaround-iso-on-a-partition). The
 definitive test is still a real reboot ([Step 4](#step-4--boot-and-install)).
+
+**Alternative — boot the ISO file directly** (confirms the ISO, not the USB layout):
+
+```bash
+ISO=~/Downloads/csb-fedora-44-2026-05-26.iso
+
+sudo qemu-system-x86_64 \
+  -enable-kvm \
+  -machine q35 \
+  -m 4096 -smp 2 \
+  -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE.fd \
+  -drive if=pflash,format=raw,file=/tmp/OVMF_VARS.fd \
+  -cdrom "$ISO" \
+  -boot order=d
+```
+
+**What does not work in QEMU** (may still boot fine on real hardware):
+
+| Approach | Symptom |
+| --- | --- |
+| No OVMF (SeaBIOS only) | Stuck at `Booting from Hard Disk...` |
+| Whole disk `$USB` via `usb-storage` | UEFI loads GRUB, then drops to `grub>` — try [configfile](#grub-configfile-workaround-iso-on-a-partition) |
+| `$USB` unset when using `sudo` | `A block device must be specified for "file"` |
 
 ## Step 4 — Boot and install
 
@@ -364,3 +402,4 @@ This is expected for a **partition-level** hybrid ISO, not a failed `dd`. Whole-
 | Reusing an old `$USB` after replug | Can overwrite the wrong disk — always `lsblk` first |
 | `rsync` without `--exclude='kingston'` | Copies into the mount under `$HOME` — fills the USB or loops |
 | `dd` ISO to `${USB}1` (not whole disk) | GRUB may stop at `grub>` — load `configfile (hd0,gpt1)/boot/grub2/grub.cfg` |
+| QEMU: whole `$USB` via `usb-storage`, no OVMF | `Booting from Hard Disk...` or `grub>` rescue — use OVMF + `${USB}1` ([verify §4](#4--optional-dry-run-boot-in-qemu)) |
