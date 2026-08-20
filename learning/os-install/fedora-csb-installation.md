@@ -24,12 +24,9 @@ every destructive command — examples below use **`/dev/sdc`** after a replug o
 | [Back up home directory](#back-up-home-directory-to-homeotuskingston) | `rsync` `$HOME`; exclude `kingston`, `.cache` |
 | [Optional: `/etc/fstab`](#optional-persist-mount-in-etcfstab) | Mount by UUID |
 | [Step 3 — Write the ISO](#step-3--write-the-iso-to-usb1) | `dd` ISO to `${USB}1` only |
-| [Step 4 — UEFI boot fix](#step-4--uefi-boot-fix-if-needed) | `gdisk` type `ef00` on partition 1 |
-| [Step 5 — Boot and install](#step-5--boot-and-install) | Firmware boot menu, Anaconda |
-| [Filesystem check (legacy layout)](#filesystem-check-legacy-whole-disk-layout) | `e2fsck` on old whole-disk ext4 |
+| [Verify bootable](#verify-the-usb-is-bootable) | Checks before reboot |
+| [Step 4 — Boot and install](#step-4--boot-and-install) | Firmware boot menu, Anaconda |
 | [Pitfalls](#pitfalls) | Common mistakes |
-| [Alternatives](#alternatives) | Ventoy, whole-disk `dd`, GRUB loopback |
-| [Quick reference](#quick-reference) | All commands on one page |
 
 ## Goal
 
@@ -177,37 +174,187 @@ sync
 
 After `dd`, `${USB}1` often shows no normal filesystem in `lsblk`. That is expected.
 
-## Step 4 — UEFI boot fix (if needed)
+## Verify the USB is bootable
 
-If the firmware does not list the USB, mark partition 1 as EFI System:
+Run these checks **before** rebooting. They confirm the ISO landed correctly on `${USB}1`.
+
+### 1 — Confirm the write size
+
+Bytes copied by `dd` should match the ISO file size:
 
 ```bash
 USB=/dev/sdc
-sudo gdisk $USB
+ISO=~/Downloads/csb-fedora-44-2026-05-26.iso
+
+stat -c '%s bytes (%n)' "$ISO"
+sudo blockdev --getsize64 ${USB}1
 ```
 
-In `gdisk`: `t` → `1` → `ef00` → `w` → confirm.
+`${USB}1` must be **at least** as large as the ISO (~3.3 GiB for current CSB images). The
+`dd` byte count should match `stat` on the ISO.
 
-## Step 5 — Boot and install
+### 2 — Inspect partition content
+
+```bash
+lsblk -f $USB
+sudo file -s ${USB}1
+sudo blkid ${USB}1
+```
+
+Expect ISO 9660 / UDF (hybrid installer layout). No normal `FSTYPE` in `lsblk` is fine.
+
+Expected `file` output (CSB / Fedora 44 example):
+
+```text
+/dev/sdc1: ISO 9660 CD-ROM filesystem data (DOS/MBR boot sector) 'Fedora-E-dvd-x86_64-44' (bootable)
+```
+
+The **`(bootable)`** tag means the hybrid ISO boot structures are present on `${USB}1`.
+
+Expected `blkid` output (same CSB / Fedora 44 image):
+
+```text
+/dev/sdc1: BLOCK_SIZE="2048" UUID="2026-04-22-13-38-48-00" LABEL="Fedora-E-dvd-x86_64-44" TYPE="iso9660" PTUUID="5d122ca8-3e16-4f53-bc40-9b84c96829f6" PTTYPE="gpt" PARTLABEL="primary" PARTUUID="c4bde114-b2a3-4232-b178-7da17f400107"
+```
+
+`TYPE="iso9660"` and the Fedora volume label confirm the installer ISO is on `${USB}1`. UUID
+values differ per ISO build; the label and type are what matter.
+
+`parted $USB print` may warn that not all space on `${USB}1` is used — the 10 GiB partition is
+intentionally larger than the ~3.3 GiB ISO. Answer **`Ignore`** (or `I`):
+
+```text
+Warning: Not all of the space available to /dev/sdc1 appears to be used, you can fix the GPT to use all of the space (an extra 14446924 blocks) or continue with the current setting?
+Fix/Ignore? Ignore
+Model: Unknown (unknown)
+Disk /dev/sdc1: 10.7GB
+Sector size (logical/physical): 512B/512B
+Partition Table: gpt
+Disk Flags:
+
+Number  Start   End     Size    File system  Name       Flags
+ 1      32.8kB  3326MB  3326MB               ISO9660    hidden, msftdata
+ 2      3326MB  3340MB  13.6MB  fat16        Appended2  boot, esp
+```
+
+That table is the **installer ISO’s internal layout** inside `${USB}1` (ISO9660 + EFI
+`Appended2`), not the outer 10 GiB + backup table from [Step 1](#step-1--repartition-gpt-10-gib--rest).
+The unused space warning is normal. For the outer GPT (`${USB}1` + `${USB}2`), use
+`gdisk -l $USB` instead — it does not prompt.
+
+### 3 — Check GPT partition type
+
+```bash
+sudo gdisk -l $USB
+```
+
+Expected outer GPT after [Step 1](#step-1--repartition-gpt-10-gib--rest) and
+[Step 3](#step-3--write-the-iso-to-usb1) (Kingston example):
+
+```text
+GPT fdisk (gdisk) version 1.0.10
+
+Partition table scan:
+  MBR: protective
+  BSD: not present
+  APM: not present
+  GPT: present
+
+Found valid GPT with protective MBR; using GPT.
+Disk /dev/sdc: 242155520 sectors, 115.5 GiB
+Model: DataTraveler 3.0
+Sector size (logical/physical): 512/512 bytes
+Disk identifier (GUID): 64E7C77C-0F6F-4A82-9A3D-EDF57CA46A95
+Partition table holds up to 128 entries
+Main partition table begins at sector 2 and ends at sector 33
+First usable sector is 34, last usable sector is 242155486
+Partitions will be aligned on 2048-sector boundaries
+Total free space is 4029 sectors (2.0 MiB)
+
+Number  Start (sector)    End (sector)  Size       Code  Name
+   1            2048        20971519   10.0 GiB    8300  primary
+   2        20971520       242153471   105.5 GiB   8300  primary
+```
+
+| Partition | Expected | Notes |
+| --- | --- | --- |
+| 1 | 10.0 GiB, code **`8300`** | Installer lives here after `dd` |
+| 2 | ~105 GiB, code **`8300`** | Backup ext4 |
+
+GUIDs and sector counts vary by drive size; partition sizes and codes are what matter.
+
+| Check | Good sign |
+| --- | --- |
+| `dd` byte count | Matches ISO size |
+| `file -s ${USB}1` | `(bootable)` in output |
+| `blkid ${USB}1` | `TYPE="iso9660"`, Fedora label |
+| Partition 1 type | `8300`, 10.0 GiB on outer GPT |
+| Firmware boot menu | Fedora/CSB installer appears ([Step 4](#step-4--boot-and-install)) |
+
+Unused space inside the 10 GiB boot partition does **not** mean the stick failed — only the
+ISO-sized region is written.
+
+### 4 — Optional: dry-run boot in QEMU
+
+Fedora/CSB installers are **UEFI-only**. QEMU defaults to legacy BIOS (SeaBIOS), which shows
+`Booting from Hard Disk...` and never reaches the installer. Pass **OVMF** firmware and boot
+**`${USB}1`** (the partition that received `dd`), not the whole disk.
+
+Prepare writable UEFI variables once per host (copy from the read-only template):
+
+```bash
+cp /usr/share/OVMF/OVMF_VARS.fd /tmp/OVMF_VARS.fd
+```
+
+Boot the installer partition:
+
+```bash
+USB=/dev/sdc    # confirm with lsblk first
+
+sudo umount ${USB}* 2>/dev/null
+
+sudo qemu-system-x86_64 \
+  -enable-kvm \
+  -machine q35 \
+  -m 4096 -smp 2 \
+  -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE.fd \
+  -drive if=pflash,format=raw,file=/tmp/OVMF_VARS.fd \
+  -drive if=virtio,file=${USB}1,format=raw,readonly=on \
+  -boot order=c
+```
+
+If the GRUB/Fedora menu appears, the stick is bootable. The definitive test is still a real
+reboot ([Step 4](#step-4--boot-and-install)).
+
+**Alternative — boot the ISO file directly** (confirms the ISO, not the USB layout):
+
+```bash
+ISO=~/Downloads/csb-fedora-44-2026-05-26.iso
+
+sudo qemu-system-x86_64 \
+  -enable-kvm \
+  -machine q35 \
+  -m 4096 -smp 2 \
+  -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE.fd \
+  -drive if=pflash,format=raw,file=/tmp/OVMF_VARS.fd \
+  -cdrom "$ISO" \
+  -boot order=d
+```
+
+**What does not work in QEMU** (may still boot fine on real hardware):
+
+| Approach | Symptom |
+| --- | --- |
+| No OVMF (SeaBIOS only) | Stuck at `Booting from Hard Disk...` |
+| Whole disk `$USB` via `usb-storage` | UEFI loads GRUB, then drops to `grub>` rescue shell |
+| `$USB` unset when using `sudo` | `A block device must be specified for "file"` |
+
+## Step 4 — Boot and install
 
 1. Reboot and open the firmware boot menu (often F12, F10, Esc — machine-dependent).
 2. Select the USB entry (sometimes listed as the Kingston device or the 10 GiB partition).
 3. Prefer **`UEFI: …`** over legacy/CSM when installing on modern hardware.
 4. Run Anaconda and complete the CSB install to the target disk.
-
-## Filesystem check (legacy whole-disk layout)
-
-If the USB previously had ext4 directly on the whole disk (no partition table) and you saw
-`needs journal recovery` in `file -s`, run **`e2fsck` before repartitioning** only if you still
-need to read old data off that layout:
-
-```bash
-USB=/dev/sdc
-sudo umount $USB
-sudo e2fsck -f $USB
-```
-
-After migrating to GPT + new partitions, this no longer applies to `${USB}1`/`${USB}2`.
 
 ## Pitfalls
 
@@ -218,40 +365,4 @@ After migrating to GPT + new partitions, this no longer applies to `${USB}1`/`${
 | `dd` to `$USB` (whole disk) | Entire USB wiped, including backups |
 | Reusing an old `$USB` after replug | Can overwrite the wrong disk — always `lsblk` first |
 | `rsync` without `--exclude='kingston'` | Copies into the mount under `$HOME` — fills the USB or loops |
-
-## Alternatives
-
-**Ventoy** — install once, copy ISOs as files, pick from a boot menu. Requires repartitioning and
-a full data backup first; simpler if you swap ISOs often.
-
-**Whole-disk `dd`** — `dd if=image.iso of=$USB` is the standard single-purpose installer stick,
-but it wipes the entire drive including backups.
-
-**GRUB loopback** — keep the ISO as a file on ext4 and boot via a manual GRUB EFI setup; flexible
-for Linux ISOs, more work than `dd` to `${USB}1`.
-
-## Quick reference
-
-```bash
-lsblk -f
-USB=/dev/sdc    # set to your Kingston USB
-
-# Partition
-sudo parted -s $USB mklabel gpt
-sudo parted -s $USB mkpart primary 1MiB 10GiB
-sudo parted -s $USB mkpart primary 10GiB 100%
-
-# Backup partition
-sudo mkfs.ext4 -L kingston-backup ${USB}2
-sudo mount ${USB}2 /home/otus/kingston
-
-# Home backup
-sudo rsync -aAXHv --info=progress2 \
-  --exclude='kingston' \
-  --exclude='.cache' \
-  /home/otus/ /home/otus/kingston/home-backup/
-
-# Boot partition
-sudo dd if=~/Downloads/csb-fedora-44-2026-05-26.iso of=${USB}1 bs=4M status=progress conv=fsync
-sync
-```
+| QEMU: whole `$USB` via `usb-storage`, no OVMF | `Booting from Hard Disk...` or `grub>` rescue — use OVMF + `${USB}1` ([verify §4](#4--optional-dry-run-boot-in-qemu)) |
