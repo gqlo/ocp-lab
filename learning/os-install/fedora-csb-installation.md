@@ -7,6 +7,10 @@ CSB (Corporate Standard Base) is Red Hat IT’s internal Fedora Workstation imag
 below works for any hybrid Fedora/CSB installer ISO (~3 GiB); install the OS from the boot menu
 after reboot.
 
+**Fedora 44 ISO download:**
+[csb-fedora-44-2026-05-26.iso](https://hdn.corp.redhat.com/fedora-csb-isos/csb-fedora-44-2026-05-26.iso)
+(Red Hat corp network)
+
 Device names shift when you unplug/replug (`sdb` → `sdc`, etc.). Set `USB` from `lsblk` before
 every destructive command — examples below use **`/dev/sdc`** after a replug on one test host.
 
@@ -22,11 +26,11 @@ every destructive command — examples below use **`/dev/sdc`** after a replug o
 | [Step 1 — Repartition](#step-1--repartition-gpt-10-gib--rest) | GPT: 10 GiB + remainder |
 | [Step 2 — Format the backup partition](#step-2--format-the-backup-partition-usb2) | `mkfs.ext4`, mount `/home/otus/kingston` |
 | [Back up home directory](#back-up-home-directory-to-homeotuskingston) | `rsync` `$HOME`; exclude `kingston`, `.cache` |
-| [Optional: `/etc/fstab`](#optional-persist-mount-in-etcfstab) | Mount by UUID |
 | [Step 3 — Write the ISO](#step-3--write-the-iso-to-usb1) | `dd` ISO to `${USB}1` only |
 | [Verify bootable](#verify-the-usb-is-bootable) | Checks before reboot |
 | [Step 4 — Boot and install](#step-4--boot-and-install) | Firmware boot menu, GRUB `configfile` if needed, Anaconda |
 | [Pitfalls](#pitfalls) | Common mistakes |
+| [References](#references) | Red Hat Hub CSB install KB |
 
 ## Goal
 
@@ -40,6 +44,7 @@ Writing the ISO to **`${USB}1` only** leaves **`${USB}2`** untouched.
 ## Prerequisites
 
 - Fedora CSB installer ISO, e.g. `~/Downloads/csb-fedora-44-2026-05-26.iso`
+  ([Fedora 44 download](https://hdn.corp.redhat.com/fedora-csb-isos/csb-fedora-44-2026-05-26.iso))
 - USB drive with enough space for backups **and** a ~10 GiB boot partition
 - Root/sudo on a Linux host (Fedora/RHEL)
 - **Back up USB data elsewhere** before repartitioning — creating a GPT table wipes the old layout
@@ -140,20 +145,6 @@ Notes:
 - Re-run the same `rsync` command to update an existing backup; only changed files transfer.
 - Ensure the backup partition has enough free space for all of `$HOME`.
 - Add more `--exclude='…'` lines for other bulky paths (e.g. `.local/share/Trash/`).
-
-### Optional: persist mount in `/etc/fstab`
-
-Use UUID so the mount survives device renames (`sdb` → `sdc`, etc.):
-
-```bash
-sudo blkid ${USB}2
-```
-
-Add a line like (replace UUID):
-
-```text
-UUID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx  /home/otus/kingston  ext4  defaults  0  2
-```
 
 ## Step 3 — Write the ISO to `${USB}1`
 
@@ -403,3 +394,7 @@ This is expected for a **partition-level** hybrid ISO, not a failed `dd`. Whole-
 | `rsync` without `--exclude='kingston'` | Copies into the mount under `$HOME` — fills the USB or loops |
 | `dd` ISO to `${USB}1` (not whole disk) | GRUB may stop at `grub>` — load `configfile (hd0,gpt1)/boot/grub2/grub.cfg` |
 | QEMU: whole `$USB` via `usb-storage`, no OVMF | `Booting from Hard Disk...` or `grub>` rescue — use OVMF + `${USB}1` ([verify §4](#4--optional-dry-run-boot-in-qemu)) |
+
+## References
+
+- [Red Hat Hub KB0020936](https://redhathub.service-now.com/hub?id=kb_article_view&sysparm_article=KB0020936) — official Fedora CSB installation article (Red Hat Hub login required)
