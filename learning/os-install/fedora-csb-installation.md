@@ -14,7 +14,7 @@ after reboot.
 Device names shift when you unplug/replug (`sdb` → `sdc`, etc.). Set `USB` from `lsblk` before
 every destructive command — examples below use **`/dev/sdc`** after a replug on one test host.
 
-**Last Updated:** 2026-08-20
+**Last Updated:** 2026-08-24
 
 ## Catalog
 
@@ -29,6 +29,7 @@ every destructive command — examples below use **`/dev/sdc`** after a replug o
 | [Step 3 — Write the ISO](#step-3--write-the-iso-to-usb1) | `dd` ISO to `${USB}1` only |
 | [Verify bootable](#verify-the-usb-is-bootable) | Checks before reboot |
 | [Step 4 — Boot and install](#step-4--boot-and-install) | Firmware boot menu, GRUB `configfile` if needed, Anaconda |
+| [Post-install tweaks](#post-install-tweaks-this-machine) | GNOME 50 middle-click paste (Ptyxis) |
 | [Pitfalls](#pitfalls) | Common mistakes |
 | [References](#references) | Red Hat Hub CSB install KB |
 
@@ -382,6 +383,40 @@ The installer menu should appear. Continue with Anaconda as usual.
 
 This is expected for a **partition-level** hybrid ISO, not a failed `dd`. Whole-disk `dd` to
 `$USB` usually boots the menu without this step, but it would wipe the backup partition.
+
+## Post-install tweaks (this machine)
+
+Fedora CSB 44 ships **GNOME 50** on Wayland. Default terminal is **Ptyxis** (`ptyxis`), not
+`gnome-terminal`. Recorded here after the first login on this host.
+
+### Restore middle-click paste
+
+GNOME 50 sets `gtk-enable-primary-paste` to **`false`**. Highlighting text still fills the
+PRIMARY selection, but GTK apps (Ptyxis, Files, Text Editor) ignore a middle-button paste.
+Firefox/Chrome often still paste because they do not honor this GTK flag.
+
+Enable it:
+
+```bash
+gsettings set org.gnome.desktop.interface gtk-enable-primary-paste true
+```
+
+Confirm:
+
+```bash
+gsettings get org.gnome.desktop.interface gtk-enable-primary-paste
+```
+
+Expect `true`. Then **quit every Ptyxis window** (not only a tab) and open a new one — Ptyxis
+reads the setting at startup.
+
+| What you want | What to use |
+| --- | --- |
+| Select text, paste with the scroll-wheel click | PRIMARY — requires `gtk-enable-primary-paste true` |
+| Explicit copy/paste in the terminal | Ctrl+Shift+C / Ctrl+Shift+V (CLIPBOARD) |
+
+GUI alternative: `sudo dnf install gnome-tweaks`, then toggle the primary/middle-click paste
+option.
 
 ## Pitfalls
 
