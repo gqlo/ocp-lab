@@ -12,6 +12,8 @@ disrupted cluster networking.
 - [Environment](#environment)
 - [Symptoms](#symptoms)
 - [Root cause chain](#root-cause-chain)
+- [OVS overflow evidence](#ovs-overflow-evidence)
+- [Example transition (osd.84)](#example-transition-osd84)
 - [Example logs (osd.3)](#example-logs-osd3)
 - [Recovery](#recovery)
 - [Configuration reference](#configuration-reference)
@@ -79,9 +81,9 @@ simultaneously explains mass PG inactive/degraded state.
 ## Root cause chain
 
 ```text
-UDN / VM workload disrupts OVN or host networking
+UDN / VM workload overloads OVN/OVS (netlink buffer overflow → packet loss)
         ↓
-OSD heartbeat failures (peer + mon)
+OSD heartbeat failures on pod network (peer + mon, port 6804)
         ↓
 OSDs marked down repeatedly by Ceph
         ↓
@@ -94,7 +96,30 @@ Rook OSD wrapper: exit 0 → sleep 24h (anti-flapping)
 Pod stays Running 2/2; Ceph shows OSD down; cluster does not self-heal
 ```
 
-See [Example logs (osd.3)](#example-logs-osd3) for the full trace from this incident.
+See [OVS overflow evidence](#ovs-overflow-evidence) and [Example logs (osd.3)](#example-logs-osd3).
+
+## OVS overflow evidence
+
+UDN VM density drove OVS kernel datapath cache churn. Upcalls to `ovs-vswitchd`
+overflowed the netlink socket; **dropped upcalls = dropped packets** on the pod
+network where Ceph OSD heartbeats run.
+
+| Metric | Unit | Meaning |
+|--------|------|---------|
+| `ovs_vswitchd_dp_flows_total` | flows | Kernel datapath cache size (often tiny vs workload) |
+| `ovs_vswitchd_dp_flows_lookup_missed` | packets | Cache miss → upcall attempted (overload, not loss) |
+| **`ovs_vswitchd_dp_flows_lookup_lost`** | **packets** | **Upcall dropped → packet lost** (use this for evidence) |
+
+Alert `OVNKubernetesNodeOVSOverflowKernel` fires when
+`increase(ovs_vswitchd_dp_flows_lookup_lost[5m]) > 0` for 15m. During the
+second wave (2026-08-25) it was active on **244/244** ovnkube-node pods.
+
+**Prometheus:** raw counter is cumulative — a flat line means no new loss; a rising
+slope means active loss. Prefer `increase(...[5m])` or `rate(...[5m])` for severity.
+
+**Example (osd.84, node `f12-h24-000-r660`, `ovnkube-node-8g2n2`):** see
+[Example transition (osd.84)](#example-transition-osd84) for the full heartbeat →
+sleep trace.
 
 Ceph flapping defaults (unless overridden in `ceph config`):
 
@@ -105,7 +130,8 @@ Ceph flapping defaults (unless overridden in `ceph config`):
 
 When an OSD marks itself down **more than 5 times within 600 seconds**, Ceph shuts
 it down on the next markdown (log: `marked down 6 > osd_max_markdown_count 5 in
-last 600.000000 seconds, shutting down`). See [Example logs (osd.3)](#example-logs-osd3).
+last 600.000000 seconds, shutting down`). See [Example transition (osd.84)](#example-transition-osd84)
+and [Example logs (osd.3)](#example-logs-osd3).
 
 Verify on a running cluster:
 
@@ -114,6 +140,58 @@ ceph config show-with-defaults osd.3 | grep markdown
 ceph config get osd osd_max_markdown_count
 ceph config get osd osd_max_markdown_period
 ```
+
+## Example transition (osd.84)
+
+Second wave (2026-08-25). Pod `rook-ceph-osd-84-69766c98b5-qclvk` on node
+`f12-h24-000-r660` (zone3), co-located with `ovnkube-node-8g2n2`. Pod restarted
+**18:43:38 UTC** during a quiet OVS window; overflow and heartbeats returned ~47
+minutes later.
+
+Fetch:
+
+```bash
+oc logs -n openshift-storage rook-ceph-osd-84-69766c98b5-qclvk -c osd 2>&1 \
+  | grep -iE "heartbeat_check: no reply|marked down|shutdown OSD|sleep 24h"
+```
+
+### Timeline (UTC, 2026-08-25)
+
+| Time | Event |
+|------|--------|
+| 18:43:38 | Pod/daemon started |
+| ~16:55–19:25 | `lookup_lost` flat on co-located ovnkube-node |
+| 19:30+ | `lookup_lost` climbing (~444k packets / 5m) |
+| **19:30:31** | First peer heartbeat failure (below) |
+| 19:31–19:41 | Repeated markdowns (>5 in 600s) |
+| **19:41:02** | `marked down 6 > osd_max_markdown_count 5` → Fast Shutdown → `sleep 24h` |
+| 19:41:57 | `OVNKubernetesNodeOVSOverflowKernel` fires (15m alert `for` delay) |
+
+### 1. Heartbeat failures (network)
+
+Peer `:6804` timeouts on pod-network IPs — first failures per peer in this run:
+
+```text
+19:30:31  heartbeat_check: no reply from 10.146.48.134:6804 osd.89
+19:31:57  heartbeat_check: no reply from 10.150.16.12:6804 osd.212
+19:34:52  heartbeat_check: no reply from 10.130.16.14:6804 osd.123
+19:35:43  heartbeat_check: no reply from 10.191.0.9:6804 osd.197  (continues ~1 min)
+19:36:06  heartbeat_check: no reply from 10.156.48.14:6804 osd.72
+```
+
+### 2. Flapping shutdown → 24h sleep
+
+```text
+19:41:02  marked down 6 > osd_max_markdown_count 5 in last 600.000000 seconds, shutting down
+19:41:02  shutdown OSD via async signal
+19:41:02  Fast Shutdown (exit 0)
++ ceph_osd_rc=0
+OSD daemon exited with code 0, possibly due to OSD flapping. The OSD pod will sleep for 24 hours.
++ sleep 24h
+```
+
+Pod stayed **Running 2/2**; Ceph showed **osd.84 down**. ~**139 OSD pods** were in
+the same sleep state at last scan (logs ending with `sleep 24h`).
 
 ## Example logs (osd.3)
 
