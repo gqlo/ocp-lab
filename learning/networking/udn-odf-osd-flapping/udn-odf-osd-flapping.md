@@ -117,6 +117,12 @@ second wave (2026-08-25) it was active on **244/244** ovnkube-node pods.
 **Prometheus:** raw counter is cumulative — a flat line means no new loss; a rising
 slope means active loss. Prefer `increase(...[5m])` or `rate(...[5m])` for severity.
 
+Query: `ovs_vswitchd_dp_flows_lookup_lost{pod="ovnkube-node-7rs29"}` on node
+`10.1.48.103` — flat at ~126M until **~15:25**, then steady climb (active packet
+loss). Same pattern on all ovnkube-node pods during the UDN wave.
+
+![lookup_lost cumulative counter — flat then rising at ~15:25](lookup_lost-ovnkube-node-7rs29.png)
+
 **Example (osd.84, node `f12-h24-000-r660`, `ovnkube-node-8g2n2`):** see
 [Example transition (osd.84)](#example-transition-osd84) for the full heartbeat →
 sleep trace.
