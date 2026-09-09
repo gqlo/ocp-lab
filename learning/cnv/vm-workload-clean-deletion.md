@@ -1,6 +1,6 @@
 # CNV VM workload clean deletion
 
-**Last Updated:** 2026-09-08
+**Last Updated:** 2026-09-09
 
 Lab note for tearing down KubeVirt / OpenShift Virtualization workloads at scale
 without leaving cluster-scoped storage behind. Focus is on `oc` commands; VM stop
@@ -46,6 +46,11 @@ still uses `virtctl`.
   - [Per-batch delete loop](#per-batch-delete-loop)
   - [Per-namespace delete loop](#per-namespace-delete-loop)
   - [vstorm automation](#vstorm-automation)
+- [Runtime path (VM start)](#runtime-path-vm-start)
+  - [Object chain](#object-chain)
+  - [Step-by-step flow](#step-by-step-flow)
+  - [What each layer does](#what-each-layer-does)
+  - [Inspect during provisioning](#inspect-during-provisioning)
 - [Related](#related)
 
 ---
@@ -60,6 +65,40 @@ Example from a 10k-VM workload across 10 namespaces:
 | Wait for Stopped | 5–30+ min | Many VMs may still be shutting down |
 | `oc delete ns` | Immediate | Namespaces accepted for deletion |
 | PV/VA cleanup | 1–4+ hours | Thousands of PVs/VAs can remain after 30 min |
+
+### Observed run: `./vstorm --delete-all`
+
+```text
+./vstorm --delete-all
+2026-09-08T19:50:17Z Log file created: logs/vstorm-ce647a-2026-09-08T19:50:17Z.log
+Found vstorm batches:
+  vstorm-aba638  (10 namespaces, 10000 VMs)
+
+Delete ALL batches and VM namespaces above? This is irreversible. [y/N] y
+Resources for batch 'vstorm-aba638':
+
+Namespaces: 10
+VirtualMachines: 10000
+
+2026-09-08T19:50:54Z Stopping 10000 VM(s) (virtctl stop, 200 parallel) before delete...
+2026-09-08T19:51:08Z Stop requests sent for 10000 VM(s)
+2026-09-08T19:51:08Z Waiting for 10000 VM(s) to reach Stopped...
+2026-09-08T20:05:33Z All 10000 VM(s) are Stopped
+2026-09-08T20:05:33Z Deleting namespaces for batch 'vstorm-aba638'...
+namespace "vstorm-aba638-ns-1" deleted
+namespace "vstorm-aba638-ns-10" deleted
+namespace "vstorm-aba638-ns-2" deleted
+namespace "vstorm-aba638-ns-3" deleted
+namespace "vstorm-aba638-ns-4" deleted
+namespace "vstorm-aba638-ns-5" deleted
+namespace "vstorm-aba638-ns-6" deleted
+namespace "vstorm-aba638-ns-7" deleted
+namespace "vstorm-aba638-ns-8" deleted
+namespace "vstorm-aba638-ns-9" deleted
+2026-09-08T20:05:33Z Monitoring cleanup for batch 'vstorm-aba638' (namespaces, PVCs, PVs, VolumeAttachments; refresh every 2s)...
+  namespaces=0    PVCs=0    PVs=49   VolumeAttachments=0
+2026-09-08T22:05:33Z Timed out after 7200s waiting for batch 'vstorm-aba638' cleanup; leftovers remain: namespaces=0 PVCs=0 PVs=49 VolumeAttachments=0
+```
 
 ## Notes
 
@@ -297,6 +336,8 @@ echo "Cleanup complete."
 | virt-launcher Pod | `v1/Pod` | KubeVirt launcher |
 
 ### Cleaned up asynchronously after PVC delete
+
+This is the reverse of [Runtime path (VM start)](#runtime-path-vm-start).
 
 These are cluster-scoped and not deleted in the same API call as the namespace,
 but ODF (`reclaimPolicy: Delete`) removes them automatically once PVCs are gone:
@@ -622,6 +663,83 @@ oc delete ns "$NS" --wait=false
 
 Defaults: `STOP_PARALLEL=200`, `STOP_WAIT_TIMEOUT=1800s`, `DELETE_POLL_TIMEOUT=7200s`.
 Per-batch safety check: refuses namespaces that do not match `{batch}-ns-{N}`.
+
+## Runtime path (VM start)
+
+When a VM is created or started, KubeVirt and CDI provision disks in the reverse
+order of teardown. Understanding this chain explains why stopping VMs matters
+before namespace delete (VA must detach) and why PVC delete kicks off async
+PV/VA cleanup (see [Cleaned up asynchronously after PVC delete](#cleaned-up-asynchronously-after-pvc-delete)).
+
+### Object chain
+
+```text
+VirtualMachine  (namespaced — VM spec)
+    │
+    ├── dataVolumeTemplates[]     ← template: "create this disk"
+    │       └── DataVolume        (namespaced — CDI manages provisioning)
+    │               │
+    │               ├── spec.pvc / spec.storage  ← desired PVC shape (size, SC, accessMode)
+    │               ├── spec.source                ← blank / snapshot / http / registry / …
+    │               │
+    │               └── creates & owns →  PVC     (namespaced — "I need a 20Gi disk")
+    │                                           │
+    │                                           └── binds to →  PV  (cluster — RBD image csi-vol-...)
+    │                                                                   │
+    │                                                                   └── VA  (cluster — attached on worker-N)
+    │
+    └── template.spec.volumes[]
+            └── dataVolume.name: <same DV name>   ← VM disk points at the DV
+                    └── mounted in virt-launcher Pod when VMI runs
+```
+
+The VM declares disks twice: `dataVolumeTemplates` tells KubeVirt/CDI what to
+provision; `template.spec.volumes[].dataVolume.name` wires that disk into the
+VMI (e.g. as `vda`).
+
+### Step-by-step flow
+
+```text
+VM created (or started)
+  → KubeVirt creates DataVolume(s) from dataVolumeTemplates
+    → CDI provisions disk (clone / import / blank) and creates PVC
+      → CSI provisioner creates PV and binds to PVC
+        → VMI created; virt-launcher Pod scheduled
+          → attach/detach controller creates VolumeAttachment
+            → CSI attaches PV on node → kubelet mounts volume in Pod
+```
+
+With `volumeBindingMode: WaitForFirstConsumer` (common on ODF virtualization
+StorageClasses), PV provisioning and binding may not happen until the
+virt-launcher pod is scheduled.
+
+### What each layer does
+
+| Layer | Scope | Creator | Role |
+|-------|-------|---------|------|
+| VirtualMachine | namespaced | User / vstorm | Declares disks via `dataVolumeTemplates`; references them in `volumes` |
+| DataVolume | namespaced | KubeVirt / CDI | Runs import/clone/blank provisioning; creates and owns the PVC |
+| PersistentVolumeClaim | namespaced | CDI controller | Standard K8s storage claim; what the virt-launcher pod mounts |
+| PersistentVolume | cluster | CSI provisioner (ODF) | Backing volume — one RBD image per disk (`csi-vol-…`) |
+| VolumeAttachment | cluster | attach/detach controller | Records that PV is attached on a specific node |
+
+A VM with OS disk + data disk has two DataVolumes → two PVCs → two PVs. Each
+running VMI has one VolumeAttachment per attached block volume on its node.
+
+### Inspect during provisioning
+
+```bash
+NS=my-vm-ns
+
+oc get vm,vmi,datavolume,pvc -n "$NS"
+oc get pv -o custom-columns=NAME:.metadata.name,NS:.spec.claimRef.namespace,STATUS:.status.phase \
+  | awk -v ns="$NS" '$2 == ns'
+oc get volumeattachment
+```
+
+DV status (`Pending`, `ImportInProgress`, `Succeeded`) tracks CDI provisioning.
+PVC `Bound` means storage is reserved. VA appears once the virt-launcher pod is
+scheduled and the volume is attached.
 
 ## Related
 
