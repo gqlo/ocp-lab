@@ -57,47 +57,50 @@ still uses `virtctl`.
 
 ## Typical timeline at scale
 
-Example from a 10k-VM workload across 10 namespaces:
+Example from a 10k-VM workload across 10 namespaces (ODF/Ceph RBD, `./vstorm --delete-all`):
 
 | Phase | Observed | Notes |
 |-------|----------|-------|
-| `virtctl stop` | ~14s to send all requests | Individual failures are non-fatal |
-| Wait for Stopped | 5–30+ min | Many VMs may still be shutting down |
-| `oc delete ns` | Immediate | Namespaces accepted for deletion |
-| PV/VA cleanup | 1–4+ hours | Thousands of PVs/VAs can remain after 30 min |
+| `virtctl stop` | ~14s | 10k requests at 200 parallel; individual failures are non-fatal |
+| Wait for Stopped | ~14 min | All 10k VMs reached Stopped before namespace delete |
+| `oc delete ns` | Immediate | All 10 namespaces accepted for deletion |
+| PV/VA cleanup | ~2h | Async CSI/RBD reclaim until PVs and VolumeAttachments reach zero |
+| End-to-end | ~2h 15m | From first stop request to full cleanup (no leftover PVs or VAs) |
 
 ### Observed run: `./vstorm --delete-all`
 
 ```text
-./vstorm --delete-all
-2026-09-08T19:50:17Z Log file created: logs/vstorm-ce647a-2026-09-08T19:50:17Z.log
+[root@d20-h07-000-r650 vstorm]# ./vstorm --delete-all
+2026-09-09T18:42:31Z Log file created: logs/vstorm-2ffd92-2026-09-09T18:42:31Z.log
 Found vstorm batches:
-  vstorm-aba638  (10 namespaces, 10000 VMs)
+  vstorm-2b0d37  (10 namespaces, 10000 VMs)
 
 Delete ALL batches and VM namespaces above? This is irreversible. [y/N] y
-Resources for batch 'vstorm-aba638':
+Resources for batch 'vstorm-2b0d37':
 
 Namespaces: 10
 VirtualMachines: 10000
 
-2026-09-08T19:50:54Z Stopping 10000 VM(s) (virtctl stop, 200 parallel) before delete...
-2026-09-08T19:51:08Z Stop requests sent for 10000 VM(s)
-2026-09-08T19:51:08Z Waiting for 10000 VM(s) to reach Stopped...
-2026-09-08T20:05:33Z All 10000 VM(s) are Stopped
-2026-09-08T20:05:33Z Deleting namespaces for batch 'vstorm-aba638'...
-namespace "vstorm-aba638-ns-1" deleted
-namespace "vstorm-aba638-ns-10" deleted
-namespace "vstorm-aba638-ns-2" deleted
-namespace "vstorm-aba638-ns-3" deleted
-namespace "vstorm-aba638-ns-4" deleted
-namespace "vstorm-aba638-ns-5" deleted
-namespace "vstorm-aba638-ns-6" deleted
-namespace "vstorm-aba638-ns-7" deleted
-namespace "vstorm-aba638-ns-8" deleted
-namespace "vstorm-aba638-ns-9" deleted
-2026-09-08T20:05:33Z Monitoring cleanup for batch 'vstorm-aba638' (namespaces, PVCs, PVs, VolumeAttachments; refresh every 2s)...
-  namespaces=0    PVCs=0    PVs=49   VolumeAttachments=0
-2026-09-08T22:05:33Z Timed out after 7200s waiting for batch 'vstorm-aba638' cleanup; leftovers remain: namespaces=0 PVCs=0 PVs=49 VolumeAttachments=0
+2026-09-09T18:43:04Z Stopping 10000 VM(s) (virtctl stop, 200 parallel) before delete...
+2026-09-09T18:43:18Z Stop requests sent for 10000 VM(s)
+2026-09-09T18:43:18Z Waiting for 10000 VM(s) to reach Stopped...
+  10000/10000 VMs stopped
+2026-09-09T18:56:54Z All 10000 VM(s) are Stopped
+2026-09-09T18:56:54Z Deleting namespaces for batch 'vstorm-2b0d37'...
+namespace "vstorm-2b0d37-ns-1" deleted
+namespace "vstorm-2b0d37-ns-10" deleted
+namespace "vstorm-2b0d37-ns-2" deleted
+namespace "vstorm-2b0d37-ns-3" deleted
+namespace "vstorm-2b0d37-ns-4" deleted
+namespace "vstorm-2b0d37-ns-5" deleted
+namespace "vstorm-2b0d37-ns-6" deleted
+namespace "vstorm-2b0d37-ns-7" deleted
+namespace "vstorm-2b0d37-ns-8" deleted
+namespace "vstorm-2b0d37-ns-9" deleted
+2026-09-09T18:56:54Z Monitoring cleanup for batch 'vstorm-2b0d37' (namespaces, PVCs, PVs, VolumeAttachments; refresh every 2s)...
+  namespaces=0    PVCs=0    PVs=0    VolumeAttachments=0
+2026-09-09T20:57:36Z Batch 'vstorm-2b0d37' fully cleaned up (no leftover namespaces, PVCs, PVs, or VolumeAttachments)
+2026-09-09T20:57:36Z All vstorm batches and VM namespaces deleted.
 ```
 
 ## Notes
