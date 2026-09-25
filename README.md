@@ -1,66 +1,52 @@
-# ocp-lab
+# openshift-sre-notes
 
-A collection of learning materials, scripts, and templates for OCP. Includes hands-on guides for network tracing, eBPF, and OVN/OVS internals, along with reusable templates.
+OpenShift SRE field notes: troubleshooting notes, runbooks, and hands-on labs for cluster ops (networking, storage/ODF, virtualization/CNV, monitoring, scale).
 
-## Learning — table of contents
+Use **[INDEX.md](INDEX.md)** to look up notes by symptom. AI agents: see **[AGENTS.md](AGENTS.md)**.
 
-| Topic | Guide |
-| ----- | ----- |
-| eBPF / ocp-trace | [eBPF and debugging (ocp-trace)](learning/ebpf/README.md) |
-| Ceph — storage | [PVC vs snapshot vs clone](learning/ceph/pvc-vs-snapshot-clone.md) |
-| NetApp — storage | [Trident NFS SVM setup notes](learning/netapp/netapp-setup-notes.md) |
-| Monitoring | [Monitoring catalog](learning/monitoring/README.md) (Prometheus series count, KME + COO, diskstats) |
-| OS install | [Fedora CSB bootable USB](learning/os-install/fedora-csb-installation.md) |
-| Networking — tracing | [OpenShift network tracing](learning/networking/ocp-network-tracing/ocp-net-tracing.md) |
-| Networking — single-node tracing | [Single-node OpenShift network tracing](learning/networking/single-node-ocp-network-tracking/single-node-ocp-net-tracing.md) |
-| Networking — DNS | [DNS resolution debugging](learning/networking/dns-resolution-issue/dns-resolution-error.md) |
+## Layout
 
-## Blogs — table of contents
-
-| Topic | Article |
-| ----- | ------- |
-| Hosted control plane / KubeVirt | [Effortlessly and efficiently provision OpenShift clusters with OpenShift Virtualization](https://www.redhat.com/en/blog/effortlessly-and-efficiently-provision-openshift-clusters-with-openshift-virtualization) |
-| Hosted control plane | [Correlating QPS rate with resource utilization in self-managed Red Hat OpenShift with Hosted Control Planes](https://www.redhat.com/en/blog/correlating-qps-rate-resource-utilization-self-managed-red-hat-openshift-hosted-control-planes) |
-| OpenShift Virtualization — descheduler | [Dynamic VM CPU workload rebalancing with load-aware descheduler](https://developers.redhat.com/blog/2025/06/03/dynamic-vm-cpu-workload-rebalancing-load-aware-descheduler) |
-
-## Structure
-
-```
-ocp-lab/
-├── blogs/
-├── learning/
-│   ├── ceph/
-│   ├── ebpf/
+```text
+openshift-sre-notes/
+├── INDEX.md              # symptom → note map
+├── AGENTS.md             # how agents should search this repo
+├── troubleshooting/      # debugging notes (symptoms → root cause → recovery)
+│   ├── networking/
+│   ├── storage/
+│   └── virtualization/
+├── runbooks/             # repeatable procedures (checks → steps → verify)
+│   ├── cluster-admin/
+│   └── virtualization/
+├── labs/                 # hands-on labs and durable how-tos
+│   ├── networking/
+│   ├── storage/
 │   ├── monitoring/
-│   ├── netapp/
-│   ├── os-install/
-│   └── networking/
-│       ├── dns-resolution-issue/
-│       ├── ocp-network-tracing/
-│       └── single-node-ocp-network-tracking/
-├── scripts/
-│   ├── ceph/
-│   ├── cnv/
-│   ├── io/
-│   ├── node/
-│   ├── others/
-│   └── promethus/
-├── templates/
-│   ├── cnv/
-│   ├── dashboard/
-│   ├── descheduler/
-│   ├── haproxy/
-│   ├── hpp/
-│   ├── kubelet/
-│   ├── kvm/
-│   ├── lso/
-│   ├── lvm/
-│   ├── managedCluster/
-│   ├── mce/
-│   ├── metallb/
-│   ├── multus/
-│   ├── nginx/
-│   ├── odf/
-│   ├── promethus/
-│   └── systemd/
+│   ├── ebpf/
+│   ├── scale/
+│   └── os-install/
+└── resources/            # supporting assets
+    ├── blogs/
+    ├── scripts/
+    └── templates/
 ```
+
+## Quick links
+
+| Type | Entry |
+| ---- | ----- |
+| Lookup | [INDEX.md](INDEX.md) |
+| Troubleshooting | [troubleshooting/](troubleshooting/) |
+| Runbooks | [runbooks/](runbooks/) |
+| Labs | [labs/](labs/) |
+| Resources | [resources/](resources/) |
+
+## Content types
+
+| Folder | Put here when… |
+| ------ | -------------- |
+| `troubleshooting/` | Debugging writeup: symptoms, evidence, root cause, recovery |
+| `runbooks/` | Repeatable procedure with ordered steps and verify |
+| `labs/` | Hands-on labs and durable how-tos (not a single outage) |
+| `resources/` | Blogs, scripts, YAML templates (supporting assets) |
+
+Domains stay stable: `networking`, `storage`, `virtualization`, `cluster-admin`, `monitoring`, `scale`.

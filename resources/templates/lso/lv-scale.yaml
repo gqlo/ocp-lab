@@ -1,0 +1,22 @@
+apiVersion: local.storage.openshift.io/v1
+kind: LocalVolume
+metadata:
+  name: monitoring-local-volume
+  namespace: openshift-local-storage
+spec:
+  nodeSelector:
+    nodeSelectorTerms:
+    - matchExpressions:
+      - key: kubernetes.io/hostname
+        operator: In
+        values:
+        - d16-h02-000-r650
+        - e44-h33-000-r650
+  storageClassDevices:
+  - storageClassName: monitoring-local-volume
+    volumeMode: Filesystem
+    fsType: xfs
+    forceWipeDevicesAndDestroyAllData: true
+    devicePaths:
+    - /dev/disk/by-path/pci-0000:67:00.0-scsi-0:2:1:0
+    - /dev/disk/by-path/pci-0000:67:00.0-scsi-0:2:2:0
