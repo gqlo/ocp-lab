@@ -12,6 +12,7 @@ Primary lookup for humans and AI. Prefer matching **symptoms** / error strings f
 | VM stuck at Starting; CPU starve / iDRAC | virtualization | [vm-stuck-at-starting](troubleshooting/virtualization/vm-stuck-at-starting/vm-stuck-at-starting.md) |
 | MCP drain stuck; Rook/ODF PDBs vs `maxUnavailable`; OSD eviction blocks drain | storage | [odf-pdb-vs-mcp-drain](troubleshooting/storage/odf-pdb-vs-mcp-drain.md) |
 | OSD FD count >1024; many `socket:` FDs; CRI-O `nofile=1024:2048`; OSD failures at ~200+ OSDs | storage | [osd-crio-nofile-fd-exhaustion](troubleshooting/storage/osd-crio-nofile-fd-exhaustion.md) |
+| Jetlag `mno-deploy` / `boot-iso`; `Invalid Command 'VirtualMediaInsert'`; Dell r670 / iDRAC10; old `community.general` on Python 3.6 | jetlag | [idrac10-virtualmediainsert-community-general](troubleshooting/jetlag/idrac10-virtualmediainsert-community-general.md) |
 
 ## Runbooks
 

@@ -13,7 +13,8 @@ openshift-sre-notes/
 ├── troubleshooting/      # debugging notes (symptoms → root cause → recovery)
 │   ├── networking/
 │   ├── storage/
-│   └── virtualization/
+│   ├── virtualization/
+│   └── jetlag/
 ├── runbooks/             # repeatable procedures (checks → steps → verify)
 │   ├── cluster-admin/
 │   └── virtualization/

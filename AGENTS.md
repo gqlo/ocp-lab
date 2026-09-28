@@ -27,6 +27,7 @@ How to use this repository when helping with OpenShift / ODF / CNV troubleshooti
 | cluster-admin | nodes, MCP, Machine API, upgrades |
 | monitoring | Prometheus, COO, metrics exporters |
 | scale | large-node / large-VM fleet config |
+| jetlag | Scale Lab / Performance Lab install tooling, Assisted Installer on bastion, BMC boot-iso |
 
 ## Adding notes (for humans)
 
