@@ -24,6 +24,7 @@ openshift-sre-notes/
 │   ├── monitoring/
 │   ├── ebpf/
 │   ├── scale/
+│   ├── memory-tiering/
 │   └── os-install/
 └── resources/            # supporting assets
     ├── blogs/
