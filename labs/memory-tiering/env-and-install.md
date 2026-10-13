@@ -8,6 +8,7 @@ Cluster / lab environment and install path for the memory-tiering feature stack
 ## Catalog
 
 - [Goal](#goal)
+- [Cluster installation](#cluster-installation)
 - [Environment](#environment)
 - [CNV installation](#cnv-installation)
 - [LVMCluster (LVMS / SSD)](#lvmcluster-lvms--ssd)
@@ -22,6 +23,12 @@ Cluster / lab environment and install path for the memory-tiering feature stack
 
 Document a reproducible lab: which cluster, OpenShift / CNV versions, hardware, and how
 the memory-tiering stack is brought up (including autopilot).
+
+## Cluster installation
+
+Bare-metal OpenShift for this lab is installed with **[Jetlag](https://github.com/redhat-performance/jetlag)** (Assisted Installer automation for Scale Lab / Performance Lab).
+
+Local notes on Jetlag failures: [troubleshooting/jetlag/](../../troubleshooting/jetlag/).
 
 ## Environment
 
