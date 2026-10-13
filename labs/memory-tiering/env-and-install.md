@@ -42,7 +42,7 @@ Local notes on Jetlag failures: [troubleshooting/jetlag/](../../troubleshooting/
 | CNV / HCO | OpenShift Virtualization **4.22.12** (`kubevirt-hyperconverged-operator.v4.22.12`, Phase Succeeded) |
 | Nodes (CPU) | 2× Intel Xeon Gold 5420+ (28 cores/socket, SMT), 112 CPUs, 2 NUMA nodes, VT-x |
 | Nodes (disk) | 2× SCSI SSD **1.7T** (`sdb`, `sdc`); 1× NVMe **2.9T** (`nvme0n1`) |
-| Nodes (RAM) | TBD |
+| Nodes (RAM) | **503Gi** total (`free -h`); swap **not enabled** (0B) before autopilot / swap-enable |
 | Storage | LVMS — SSD device class on `d37-h14-000-r660` (see below) |
 
 ## CNV installation
