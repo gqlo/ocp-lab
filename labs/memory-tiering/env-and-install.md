@@ -1,22 +1,33 @@
 # Memory tiering — env and install
 
-**Last Updated:** 2026-10-13
+**Last Updated:** 2026-10-16
 
 Cluster / lab environment and install path for the memory-tiering feature stack
 (swap, KSM zero pages, FPR, descheduler, autopilot).
 
 ## Catalog
 
-- [Goal](#goal)
-- [Cluster installation](#cluster-installation)
-- [Worker SSH (bastion key)](#worker-ssh-bastion-key)
-- [Environment](#environment)
-- [CNV installation](#cnv-installation)
-- [LVMCluster (LVMS / SSD)](#lvmcluster-lvms--ssd)
-  - [LVMCluster CR](#lvmcluster-cr)
-  - [Verify](#verify)
-- [Autopilot wiring](#autopilot-wiring)
-- [Alerting dashboard (KContext)](#alerting-dashboard-kcontext)
+<!-- If you don't use emacs, you can edit this manually -->
+<!-- markdown-toc start - Don't edit this section. Run M-x markdown-toc-refresh-toc -->
+**Table of Contents**
+
+- [Memory tiering — env and install](#memory-tiering--env-and-install)
+  - [Catalog](#catalog)
+  - [Goal](#goal)
+  - [Cluster installation](#cluster-installation)
+  - [Worker SSH (bastion key)](#worker-ssh-bastion-key)
+    - [`worker-ssh-key-mcp.yaml`](#worker-ssh-key-mcpyaml)
+    - [Verify](#verify)
+  - [Environment](#environment)
+  - [CNV installation](#cnv-installation)
+  - [LVMCluster (LVMS / SSD)](#lvmcluster-lvms--ssd)
+    - [LVMCluster CR](#lvmcluster-cr)
+    - [Verify](#verify-1)
+  - [Setup swap](#setup-swap)
+  - [Autopilot wiring](#autopilot-wiring)
+  - [Alerting dashboard (KContext)](#alerting-dashboard-kcontext)
+
+<!-- markdown-toc end -->
 
 ---
 
@@ -230,6 +241,129 @@ nvme0n1   2.9T disk
 ```
 
 `sdb` is `LVM2_member` under VG `lvm-d37-h14-000-r660-ssd-storage` (full free — no LVs yet). `sdc` / `nvme0n1` unused.
+
+## Setup swap
+
+Run this script from the bastion. It requires ssh to have been set up;
+if it isn't, it wouldn't be hard to modify this script to use `oc
+debug node`. It assumes that there is a single free NVMe drive and
+sets up a swap partition which it then check by running free (you have
+to look at the output at least for now):
+
+```bash
+#!/bin/bash
+
+rscript=
+
+read -r -d '' rscript <<'EOF' || true
+#!/bin/bash
+
+set -eu
+label=OCPSWAP
+part=/dev/disk/by-partlabel/$label
+
+trap 'if [[ -n "${lsblk:-}" && -f "$lsblk" ]] ; then rm -f "$lsblk" ; fi; exit' EXIT INT HUP TERM
+
+create_ocpswap() {
+
+    lsblk=$(mktemp -t 'lsblk.XXXXXX')
+
+    cat > "$lsblk" <<'EOP'
+#!/usr/bin/python3
+
+import json
+import sys
+from pathlib import Path
+import subprocess
+
+def get_children(dev, rootdev, level=0):
+    try:
+        wwn = dev['wwn']
+        tran = dev['tran']
+        if tran == 'nvme':
+            for mp in dev['mountpoints']:
+                if mp is None:
+                    dev = Path(f'/dev/disk/by-id/nvme-{wwn}')
+                    if dev.is_block_device():
+                        print(dev)
+    except (KeyboardInterrupt, BrokenPipeError):
+        sys.exit()
+    except KeyError:
+        pass
+
+try:
+    result = subprocess.run(['lsblk', '-O', '-J'], capture_output=True, text=True)
+    data = json.loads(result.stdout)['blockdevices']
+    for dev in data:
+        try:
+            get_children(dev, dev['name'])
+        except KeyError:
+            pass
+except (KeyboardInterrupt, BrokenPipeError):
+    sys.exit()
+except Exception as exc:
+    print(f'Unable to retrieve block device information: {exc}')
+    sys.exit(1)
+EOP
+
+    chmod +x "$lsblk"
+    declare -a devices=()
+    readarray -t devices <<< "$("$lsblk")"
+
+    case "${#devices[@]}" in
+	0)
+	    echo "No valid NVMe devices found"
+	    return 1
+	    ;;
+	1)
+	    dev="${devices[0]}"
+	    echo "Labeling/partitioning $dev"
+	    echo -e "label:gpt\nname=$label, type=swap" | sfdisk --wipe=always "$dev"
+	    set +x
+	    retries=12
+	    until [[ -e "$part" ]] ; do
+		echo "Waiting for $part to appear"
+		if ((retries-- <= 0)) ; then
+		    echo "$part not present after 60 seconds"
+		    return 1
+		else
+		    sleep 5
+		fi
+	    done
+	    ;;
+	*)
+	    echo "More than one valid NVMe device found"
+	    return 1
+	    ;;
+    esac
+}
+
+if [[ ! -e "$part" ]] ; then
+    create_ocpswap || exit 1
+fi
+
+echo "Creating swap"
+mkswap -L "$label" "$part"
+echo "Testing swap"
+swapon "$part"
+free | grep -i swap || true
+swapoff "$part"
+EOF
+
+declare nodes=()
+
+if [[ -n "$*" ]] ; then
+    nodes=("$@")
+else
+    readarray -t nodes <<< "$(oc get node --no-headers | grep worker | awk '{print $1}')"
+fi
+    
+trap 'exit 1' INT HUP TERM
+for node in "${nodes[@]}" ; do
+    echo "$node"
+    ssh "core@$node" sudo bash - <<< "$rscript"
+done
+```
 
 ## Autopilot wiring
 
