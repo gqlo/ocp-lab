@@ -532,6 +532,8 @@ oc debug node/d37-h14-000-r660 -- chroot /host grep -o 'psi=1' /proc/cmdline
 
 Example output (vlan615, 2026-10-19):
 
+`oc get mc 99-openshift-machineconfig-worker-psi-karg -o yaml`:
+
 ```yaml
 apiVersion: machineconfiguration.openshift.io/v1
 kind: MachineConfig
@@ -542,14 +544,20 @@ metadata:
     machineconfiguration.openshift.io/role: worker
     platform.kubevirt.io/managed-by: virt-platform-autopilot
   name: 99-openshift-machineconfig-worker-psi-karg
+  resourceVersion: "5867076"
+  uid: 476cd49d-fd0d-4e1a-a181-47de16f6ac1e
 spec:
   kernelArguments:
   - psi=1
 ```
 
+`oc debug node/d37-h14-000-r660 -- chroot /host grep -o 'psi=1' /proc/cmdline`:
+
 ```text
-Starting pod/d37-h14-000-r660-debug-... ...
+Starting pod/d37-h14-000-r660-debug-557cx ...
+To use host binaries, run `chroot /host`. Instead, if you need to access host namespaces, run `nsenter -a -t 1`.
 psi=1
+
 Removing debug pod ...
 ```
 
