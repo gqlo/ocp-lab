@@ -1,6 +1,6 @@
 # Memory tiering — env and install
 
-**Last Updated:** 2026-10-16
+**Last Updated:** 2026-10-19
 
 Cluster / lab environment and install path for the memory-tiering feature stack
 (swap, KSM zero pages, FPR, descheduler, autopilot).
@@ -25,6 +25,12 @@ Cluster / lab environment and install path for the memory-tiering feature stack
     - [Verify](#verify-1)
   - [Setup swap](#setup-swap)
   - [Autopilot wiring](#autopilot-wiring)
+  - [Descheduler (load-aware)](#descheduler-load-aware)
+    - [Enable via autopilot](#enable-via-autopilot)
+    - [KubeDescheduler instance](#kubedescheduler-instance)
+    - [PSI kernel argument](#psi-kernel-argument)
+    - [Policy / Prometheus metrics](#policy--prometheus-metrics)
+    - [Verify](#verify-2)
   - [Alerting dashboard (KContext)](#alerting-dashboard-kcontext)
 
 <!-- markdown-toc end -->
@@ -107,7 +113,8 @@ Captured from `oc` against `api.vlan615.rdu2.scalelab.redhat.com` (2026-10-13).
 | Nodes (disk) | On `d37-h14-000-r660`: OS `sda` 446G; 2× SCSI SSD **1.7T** (`sdb` LVMS, `sdc` unused); 1× NVMe **2.9T** (`nvme0n1`) |
 | Nodes (RAM) | **~503Gi** / node (`free -h` on worker); swap **not enabled** (0B) before autopilot / swap-enable |
 | Storage | LVMS **4.22.0** — SSD device class on `d37-h14-000-r660` (see below) |
-| Autopilot | `virt-platform-autopilot` Deployment Ready; HCO annotation `platform.kubevirt.io/autopilot` **not set** yet |
+| Autopilot | `virt-platform-autopilot` Ready; HCO annotation `platform.kubevirt.io/autopilot=descheduler-loadaware` (2026-10-19) |
+| Descheduler | Operator **5.4.3**; `KubeDescheduler/cluster` Managed, profile `KubeVirtRelieveAndMigrate`, mode Automatic; workers have `psi=1` |
 
 ## CNV installation
 
@@ -371,9 +378,9 @@ Overview and enablement (OpenShift Virtualization 4.22 developer preview):
 
 - [Introducing virtualization platform autopilot](https://developers.redhat.com/articles/2026/05/07/introducing-virtualization-platform-autopilot) (Red Hat Developer, 2026-05-07)
 
-Opt in on the HyperConverged CR (`platform.kubevirt.io/autopilot` annotation). Feature flags include `swap-enable`, `descheduler-loadaware`, `prometheus-alerts`, and others; use `true` for all. Dry-run via `virt-platform-autopilot` `/debug/render` is covered in the same article.
+Opt in on the HyperConverged CR (`platform.kubevirt.io/autopilot` annotation). Feature flags include `swap-enable`, `descheduler-loadaware`, `prometheus-alerts`, and others; use `true` for all features, or a comma-separated subset. Dry-run via `virt-platform-autopilot` `/debug/render` is covered in the same article.
 
-Baseline on vlan615 (before enable):
+Baseline on vlan615 (before enable, 2026-10-13):
 
 ```bash
 oc get deploy virt-platform-autopilot -n openshift-cnv
@@ -387,7 +394,323 @@ virt-platform-autopilot   1/1     1            1           23m
 {"deployOVS":"false"}   # no platform.kubevirt.io/autopilot annotation yet
 ```
 
-<!-- Fill in: lab-specific swap / KSM / FPR / descheduler choices after enable. -->
+On vlan615 (2026-10-19) only **descheduler-loadaware** was enabled so far (swap / KSM / FPR still pending):
+
+```bash
+oc annotate hyperconverged kubevirt-hyperconverged -n openshift-cnv \
+  platform.kubevirt.io/autopilot=descheduler-loadaware --overwrite
+```
+
+Resulting HCO annotations:
+
+```text
+{"deployOVS":"false","platform.kubevirt.io/autopilot":"descheduler-loadaware"}
+```
+
+Autopilot then installs/reconciles the Kube Descheduler Operator and related objects (labeled `platform.kubevirt.io/managed-by: virt-platform-autopilot`). See [Descheduler (load-aware)](#descheduler-load-aware).
+
+## Descheduler (load-aware)
+
+Captured from `oc` against vlan615 (2026-10-19). Autopilot owns the operand CRs; do not hand-edit them unless you intend to fight reconciliation.
+
+### Enable via autopilot
+
+1. Ensure CNV / HCO is healthy and `virt-platform-autopilot` is Running.
+2. Annotate HCO with `descheduler-loadaware` (or include it in a multi-flag value such as `true`).
+3. Wait for CSV `clusterkubedescheduleroperator` in `openshift-kube-descheduler-operator`, then `KubeDescheduler/cluster`, deployments `descheduler` + `softtainter`, MachineConfig `99-openshift-machineconfig-worker-psi-karg`, and worker MCP rollout (`psi=1` requires reboot).
+
+```bash
+oc get csv -n openshift-kube-descheduler-operator
+oc get kubedescheduler -n openshift-kube-descheduler-operator
+oc get deploy -n openshift-kube-descheduler-operator
+oc get mc 99-openshift-machineconfig-worker-psi-karg
+oc get mcp worker
+```
+
+Example output (vlan615, 2026-10-19):
+
+```text
+NAME                                    DISPLAY                     VERSION   RELEASE   REPLACES                                PHASE
+clusterkubedescheduleroperator.v5.4.3   Kube Descheduler Operator   5.4.3               clusterkubedescheduleroperator.v5.3.0   Succeeded
+
+NAME      AGE
+cluster   5h41m
+
+NAME                   READY   UP-TO-DATE   AVAILABLE   AGE
+descheduler            1/1     1            1           5h19m
+descheduler-operator   1/1     1            1           5h41m
+softtainter            1/1     1            1           5h19m
+
+NAME                                         GENERATEDBYCONTROLLER   IGNITIONVERSION   AGE
+99-openshift-machineconfig-worker-psi-karg                                             5h41m
+
+NAME     CONFIG                                             UPDATED   UPDATING   DEGRADED   MACHINECOUNT   READYMACHINECOUNT   UPDATEDMACHINECOUNT   DEGRADEDMACHINECOUNT   AGE
+worker   rendered-worker-b35dca4ec2af7c69c2910a55d56274db   True      False      False      9              9                   9                     0                      6d3h
+```
+
+### KubeDescheduler instance
+
+```bash
+oc get kubedescheduler cluster -n openshift-kube-descheduler-operator -o yaml
+```
+
+Example output (vlan615, 2026-10-19):
+
+```yaml
+apiVersion: operator.openshift.io/v1
+kind: KubeDescheduler
+metadata:
+  creationTimestamp: "2026-10-19T13:34:52Z"
+  generation: 3
+  labels:
+    platform.kubevirt.io/managed-by: virt-platform-autopilot
+  name: cluster
+  namespace: openshift-kube-descheduler-operator
+spec:
+  deschedulingIntervalSeconds: 60
+  evictionLimits:
+    node: 2
+    total: 5
+  logLevel: Normal
+  managementState: Managed
+  mode: Automatic
+  operatorLogLevel: Normal
+  profileCustomizations:
+    devActualUtilizationProfile: PrometheusCPUMemoryCombinedProfile
+  profiles:
+  - KubeVirtRelieveAndMigrate
+  unsupportedConfigOverrides: null
+status:
+  conditions:
+  - lastTransitionTime: "2026-10-19T13:34:52Z"
+    status: "False"
+    type: ResourceSyncControllerDegraded
+  - lastTransitionTime: "2026-10-19T13:56:11Z"
+    status: "False"
+    type: TargetConfigControllerDegraded
+  - lastTransitionTime: "2026-10-19T13:34:56Z"
+    status: "False"
+    type: ConfigObservationDegraded
+  generations:
+  - group: apps
+    lastGeneration: 2
+    name: descheduler
+    namespace: openshift-kube-descheduler-operator
+    resource: deployments
+  - group: apps
+    lastGeneration: 2
+    name: softtainter
+    namespace: openshift-kube-descheduler-operator
+    resource: deployments
+```
+
+(`observedConfig.servingInfo` cipher suite list omitted above; present on the live CR.)
+
+Important `spec` fields:
+
+| Field | Value | Notes |
+| ----- | ----- | ----- |
+| `managementState` | `Managed` | Operator owns deployments |
+| `mode` | `Automatic` | Evicts (not Predictive-only) |
+| `profiles` | `KubeVirtRelieveAndMigrate` | Load-aware relieve/migrate for KubeVirt |
+| `profileCustomizations.devActualUtilizationProfile` | `PrometheusCPUMemoryCombinedProfile` | Uses Prometheus util + PSI pressure |
+| `deschedulingIntervalSeconds` | `60` | Operand `--descheduling-interval=60s` |
+| `evictionLimits.node` / `.total` | `2` / `5` | Caps per cycle |
+
+Label: `platform.kubevirt.io/managed-by: virt-platform-autopilot`.
+
+Operand args (deployment `descheduler`): policy file `/policy-dir/policy.yaml`, `--feature-gates=EvictionsInBackground=true`, TLS serving certs. Soft-tainter uses the same policy ConfigMap.
+
+### PSI kernel argument
+
+Load-aware profile expects PSI metrics (`node_pressure_*`). Autopilot applies MachineConfig `99-openshift-machineconfig-worker-psi-karg`. Confirm on a worker:
+
+```bash
+oc get mc 99-openshift-machineconfig-worker-psi-karg -o yaml
+oc debug node/d37-h14-000-r660 -- chroot /host grep -o 'psi=1' /proc/cmdline
+```
+
+Example output (vlan615, 2026-10-19):
+
+```yaml
+apiVersion: machineconfiguration.openshift.io/v1
+kind: MachineConfig
+metadata:
+  creationTimestamp: "2026-10-19T13:34:52Z"
+  generation: 1
+  labels:
+    machineconfiguration.openshift.io/role: worker
+    platform.kubevirt.io/managed-by: virt-platform-autopilot
+  name: 99-openshift-machineconfig-worker-psi-karg
+spec:
+  kernelArguments:
+  - psi=1
+```
+
+```text
+Starting pod/d37-h14-000-r660-debug-... ...
+psi=1
+Removing debug pod ...
+```
+
+All 9 vlan615 workers show `psi=1` on `/proc/cmdline` and expose `/proc/pressure/{cpu,io,irq,memory}`.
+
+Alert `DeschedulerPSIDisabled` (`PrometheusRule/descheduler-psi-alert`) fires if workers lack PSI while the utilization profile needs it.
+
+### Policy / Prometheus metrics
+
+Operator materializes policy in ConfigMap `cluster` (`policy.yaml`):
+
+```bash
+oc get cm cluster -n openshift-kube-descheduler-operator -o yaml
+```
+
+Example output (vlan615, 2026-10-19; `evictableNamespaces.exclude` truncated):
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cluster
+  namespace: openshift-kube-descheduler-operator
+  ownerReferences:
+  - apiVersion: operator.openshift.io/v1
+    kind: KubeDescheduler
+    name: cluster
+data:
+  policy.yaml: |
+    apiVersion: descheduler/v1alpha2
+    kind: DeschedulerPolicy
+    maxNoOfPodsToEvictPerNode: 2
+    maxNoOfPodsToEvictTotal: 5
+    metricsProviders:
+    - prometheus:
+        url: https://prometheus-k8s-openshift-monitoring.apps.vlan615.rdu2.scalelab.redhat.com
+      source: Prometheus
+    nodeSelector: kubevirt.io/schedulable=true
+    profiles:
+    - name: KubeVirtRelieveAndMigrate
+      pluginConfig:
+      - args:
+          evictableNamespaces:
+            exclude:
+            - kube-system
+            - hypershift
+            - openshift
+            - openshift-cnv
+            # ... full openshift-* / system list on cluster ...
+          evictionLimits:
+            node: 2
+          metricsUtilization:
+            prometheus:
+              query: descheduler:node:linear_amplified_ideal_point_positive_distance:k3:avg1m
+            source: Prometheus
+          targetThresholds:
+            MetricResource: 10
+          thresholds:
+            MetricResource: 0
+          useDeviationThresholds: true
+        name: LowNodeUtilization
+      - args:
+          evictLocalStoragePods: true
+          noEvictionPolicy: Mandatory
+          podProtections: {}
+        name: DefaultEvictor
+      plugins:
+        balance:
+          enabled:
+          - LowNodeUtilization
+        filter:
+          enabled:
+          - DefaultEvictor
+```
+
+| Setting | Value |
+| ------- | ----- |
+| Profile plugins | `LowNodeUtilization` (balance) + `DefaultEvictor` (filter) |
+| `nodeSelector` | `kubevirt.io/schedulable=true` |
+| Metrics source | Prometheus (`prometheus-k8s` route in `openshift-monitoring`) |
+| Utilization query | `descheduler:node:linear_amplified_ideal_point_positive_distance:k3:avg1m` |
+| Thresholds | `MetricResource` low `0`, target `10`; `useDeviationThresholds: true` |
+| Eviction limits in policy | `maxNoOfPodsToEvictPerNode: 2`, `maxNoOfPodsToEvictTotal: 5` |
+
+`PrometheusRule/descheduler-rules` (30s interval) builds recording rules: CPU/memory utilization, PSI pressure (`descheduler:nodepressure:{cpu,memory}:avg1m`), positive deviations, then the k3-amplified ideal-point distance used as the descheduler metric (`clamp_max(3 * distance, 1.0)`).
+
+### Verify
+
+```bash
+oc get kubedescheduler cluster -n openshift-kube-descheduler-operator -o jsonpath='{.spec}{"\n"}'
+oc get cm cluster -n openshift-kube-descheduler-operator -o jsonpath='{.data.policy\.yaml}'
+oc get prometheusrules -n openshift-kube-descheduler-operator
+oc logs -n openshift-kube-descheduler-operator deploy/descheduler --tail=50
+oc get mc 99-openshift-machineconfig-worker-psi-karg -o yaml
+oc get csv -n openshift-kube-descheduler-operator
+oc get deploy -n openshift-kube-descheduler-operator
+oc get mcp worker
+oc debug node/d37-h14-000-r660 -- chroot /host grep -o 'psi=1' /proc/cmdline
+```
+
+Example output (vlan615, 2026-10-19):
+
+`KubeDescheduler` `.spec` (jsonpath; `observedConfig` present on cluster):
+
+```json
+{
+  "deschedulingIntervalSeconds": 60,
+  "evictionLimits": {"node": 2, "total": 5},
+  "logLevel": "Normal",
+  "managementState": "Managed",
+  "mode": "Automatic",
+  "operatorLogLevel": "Normal",
+  "profileCustomizations": {
+    "devActualUtilizationProfile": "PrometheusCPUMemoryCombinedProfile"
+  },
+  "profiles": ["KubeVirtRelieveAndMigrate"],
+  "unsupportedConfigOverrides": null
+}
+```
+
+`policy.yaml` matches the ConfigMap above (Prometheus URL, query, thresholds 0/10, limits 2/5).
+
+```text
+NAME                    AGE
+descheduler-psi-alert   5h19m
+descheduler-rules       5h19m
+
+NAME                                    DISPLAY                     VERSION   RELEASE   REPLACES                                PHASE
+clusterkubedescheduleroperator.v5.4.3   Kube Descheduler Operator   5.4.3               clusterkubedescheduleroperator.v5.3.0   Succeeded
+
+NAME                   READY   UP-TO-DATE   AVAILABLE   AGE
+descheduler            1/1     1            1           5h19m
+descheduler-operator   1/1     1            1           5h41m
+softtainter            1/1     1            1           5h19m
+
+NAME     CONFIG                                             UPDATED   UPDATING   DEGRADED   MACHINECOUNT   READYMACHINECOUNT   UPDATEDMACHINECOUNT   DEGRADEDMACHINECOUNT   AGE
+worker   rendered-worker-b35dca4ec2af7c69c2910a55d56274db   True      False      False      9              9                   9                     0                      6d3h
+
+psi=1
+```
+
+Descheduler logs (idle cluster — underutilized=7, appropriately utilized=`d36-h07`/`d37-h14`, overutilized=0, no evictions):
+
+```text
+I1019 19:15:15.618936       1 lownodeutilization.go:236] "Node has been classified" plugin="LowNodeUtilization" ExtensionPoint="Balance" category="underutilized" node="d35-h27-000-r660" usage={"MetricResource":"0"} usagePercentage={"MetricResource":0}
+I1019 19:15:15.618969       1 lownodeutilization.go:236] "Node has been classified" plugin="LowNodeUtilization" ExtensionPoint="Balance" category="underutilized" node="d36-h04-000-r660" usage={"MetricResource":"0"} usagePercentage={"MetricResource":0}
+I1019 19:15:15.618977       1 lownodeutilization.go:236] "Node has been classified" plugin="LowNodeUtilization" ExtensionPoint="Balance" category="underutilized" node="d36-h20-000-r660" usage={"MetricResource":"0"} usagePercentage={"MetricResource":0}
+I1019 19:15:15.618983       1 lownodeutilization.go:236] "Node has been classified" plugin="LowNodeUtilization" ExtensionPoint="Balance" category="underutilized" node="d35-h26-000-r660" usage={"MetricResource":"0"} usagePercentage={"MetricResource":0}
+I1019 19:15:15.618988       1 lownodeutilization.go:236] "Node has been classified" plugin="LowNodeUtilization" ExtensionPoint="Balance" category="underutilized" node="d36-h02-000-r660" usage={"MetricResource":"0"} usagePercentage={"MetricResource":0}
+I1019 19:15:15.618993       1 lownodeutilization.go:236] "Node has been classified" plugin="LowNodeUtilization" ExtensionPoint="Balance" category="underutilized" node="d36-h08-000-r660" usage={"MetricResource":"0"} usagePercentage={"MetricResource":0}
+I1019 19:15:15.618998       1 lownodeutilization.go:236] "Node has been classified" plugin="LowNodeUtilization" ExtensionPoint="Balance" category="underutilized" node="d36-h03-000-r660" usage={"MetricResource":"0"} usagePercentage={"MetricResource":0}
+I1019 19:15:15.619015       1 lownodeutilization.go:295] "Node is appropriately utilized" plugin="LowNodeUtilization" ExtensionPoint="Balance" node="d36-h07-000-r660" usage={"MetricResource":"4"} usagePercentage={"MetricResource":4}
+I1019 19:15:15.619024       1 lownodeutilization.go:295] "Node is appropriately utilized" plugin="LowNodeUtilization" ExtensionPoint="Balance" node="d37-h14-000-r660" usage={"MetricResource":"3"} usagePercentage={"MetricResource":3}
+I1019 19:15:15.619032       1 lownodeutilization.go:307] "Criteria for a node under utilization" plugin="LowNodeUtilization" ExtensionPoint="Balance" MetricResource="0.00%"
+I1019 19:15:15.619037       1 lownodeutilization.go:308] "Number of underutilized nodes" plugin="LowNodeUtilization" ExtensionPoint="Balance" totalNumber=7
+I1019 19:15:15.619041       1 lownodeutilization.go:309] "Criteria for a node above target utilization" plugin="LowNodeUtilization" ExtensionPoint="Balance" MetricResource="10.00%"
+I1019 19:15:15.619045       1 lownodeutilization.go:310] "Number of overutilized nodes" plugin="LowNodeUtilization" ExtensionPoint="Balance" totalNumber=0
+I1019 19:15:15.619048       1 lownodeutilization.go:334] "All nodes are under target utilization, nothing to do here" plugin="LowNodeUtilization" ExtensionPoint="Balance"
+I1019 19:15:15.619063       1 profile.go:417] "Total number of evictions/requests" extension point="Balance" evictedPods=0 evictionRequests=0
+I1019 19:15:15.619073       1 descheduler.go:252] "Number of evictions/requests" totalEvicted=0 evictionRequests=0
+```
 
 ## Alerting dashboard (KContext)
 
