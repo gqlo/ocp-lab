@@ -17,15 +17,13 @@ Cluster / lab environment and install path for the memory-tiering feature stack
   - [Cluster installation](#cluster-installation)
   - [Environment](#environment)
     - [Worker SSH (bastion key)](#worker-ssh-bastion-key)
-      - [`worker-ssh-key-mcp.yaml`](#worker-ssh-key-mcpyaml)
-      - [Verify](#verify)
     - [CNV installation](#cnv-installation)
     - [LVMCluster (LVMS / SSD)](#lvmcluster-lvms--ssd)
-      - [LVMCluster CR](#lvmcluster-cr)
-      - [Verify](#verify-1)
   - [Autopilot](#autopilot)
     - [List features on the cluster](#list-features-on-the-cluster)
   - [SWAP](#swap)
+    - [Create partition](#create-partition)
+    - [Verify swap is enabled](#verify-swap-is-enabled)
   - [FPR (free page reporting)](#fpr-free-page-reporting)
     - [Verify from HCO operator config](#verify-from-hco-operator-config)
     - [Verify from the guest](#verify-from-the-guest)
@@ -92,9 +90,9 @@ oc apply -f worker-ssh-key-mcp.yaml
 oc get mcp worker   # wait until UPDATED=True
 ```
 
-#### `worker-ssh-key-mcp.yaml`
-
-Paste the bastion public key into `sshAuthorizedKeys` (do not commit real keys to git). On vlan615 this was applied as `99-worker-ssh-key` from `root@f24-h03-000-r670`.
+`worker-ssh-key-mcp.yaml` — paste the bastion public key into `sshAuthorizedKeys`
+(do not commit real keys to git). On vlan615 this was applied as
+`99-worker-ssh-key` from `root@f24-h03-000-r670`.
 
 ```yaml
 apiVersion: machineconfiguration.openshift.io/v1
@@ -114,7 +112,7 @@ spec:
             - "<bastion-public-key>"
 ```
 
-#### Verify
+Verify:
 
 ```bash
 oc get mc 99-worker-ssh-key
@@ -168,7 +166,7 @@ Captured from bastion/workdir `f24-h03-000-r670` (`lvm/lvmcluster.yaml`).
 Prefer stable `/dev/disk/by-path/...` over `/dev/sdX` so the VG survives reboots /
 re-enumeration.
 
-#### LVMCluster CR
+LVMCluster CR:
 
 ```yaml
 apiVersion: lvm.topolvm.io/v1alpha1
@@ -202,7 +200,7 @@ Generic / multi-node examples also live under
 [`resources/templates/lvm/lvmcluster.yaml`](../../resources/templates/lvm/lvmcluster.yaml)
 and [`multi-pool.yaml`](../../resources/templates/lvm/multi-pool.yaml).
 
-#### Verify
+Verify:
 
 ```bash
 oc get csv -n openshift-lvm-storage
@@ -392,11 +390,21 @@ Autopilot then installs/reconciles the Kube Descheduler Operator and related obj
 
 ## SWAP
 
-Run this script from the bastion. It requires ssh to have been set up;
-if it isn't, it wouldn't be hard to modify this script to use `oc
-debug node`. It assumes that there is a single free NVMe drive and
-sets up a swap partition which it then check by running free (you have
-to look at the output at least for now):
+Worker swap for higher VM density. Autopilot can manage enablement
+(`swap-enable` / [List features on the cluster](#list-features-on-the-cluster))
+once dedicated swap storage exists; the steps below provision that storage on
+vlan615 workers (single free NVMe → GPT partition labeled `OCPSWAP`).
+
+### Create partition
+
+Run from the bastion. Requires [Worker SSH](#worker-ssh-bastion-key) (`ssh
+core@<worker>`). If SSH is not available, adapt to `oc debug node`. Assumes
+**exactly one** free NVMe (no mountpoints) per node — the script refuses 0 or
+2+.
+
+It finds that NVMe, creates a GPT swap partition (`PARTLABEL=OCPSWAP`), runs
+`mkswap`, briefly `swapon`s to smoke-test, then `swapoff`s (persistent on is
+left to autopilot / node config).
 
 ```bash
 #!/bin/bash
@@ -512,6 +520,53 @@ for node in "${nodes[@]}" ; do
     ssh "core@$node" sudo bash - <<< "$rscript"
 done
 ```
+
+Optional: pass node names as args; otherwise all workers from `oc get node`.
+
+### Verify swap is enabled
+
+**Partition present** (after create; swap may still be off if the script’s
+final `swapoff` ran):
+
+```bash
+ssh core@d37-h14-000-r660 sudo bash -c \
+  'ls -l /dev/disk/by-partlabel/OCPSWAP; lsblk -o NAME,SIZE,TYPE,FSTYPE,PARTLABEL | grep -iE "swap|nvme|NAME" || true'
+
+# or: oc debug node/d37-h14-000-r660 -- chroot /host …
+```
+
+Example output (vlan615 / `d37-h14-000-r660`, 2026-10-26):
+
+```text
+lrwxrwxrwx. 1 root root 15 Oct 19 13:40 /dev/disk/by-partlabel/OCPSWAP -> ../../nvme0n1p1
+NAME                                                                                SIZE TYPE FSTYPE      PARTLABEL
+nvme0n1                                                                             2.9T disk             
+`-nvme0n1p1                                                                         2.9T part swap        OCPSWAP
+```
+
+**Swap active** (after `swapon`, or after autopilot `swap-enable` leaves it on):
+
+```bash
+ssh core@d37-h14-000-r660 sudo bash -c 'swapon --show; free -h; cat /proc/swaps'
+```
+
+Example output (same node, 2026-10-26 — swap **on**):
+
+```text
+NAME           TYPE      SIZE  USED PRIO
+/dev/nvme0n1p1 partition 2.9T 14.5M  100
+
+               total        used        free      shared  buff/cache   available
+Mem:           503Gi        41Gi       454Gi       107Mi        24Gi       462Gi
+Swap:          2.9Ti        14Mi       2.9Ti
+
+Filename				Type		Size		Used		Priority
+/dev/nvme0n1p1                          partition	3125615936	14848		100
+```
+
+`PARTLABEL=OCPSWAP` on `nvme0n1p1` (2.9T); `swapon` / `free` show **2.9Ti** swap in use
+(small USED is fine). During the create script’s smoke test only, expect a
+non-zero `free | grep -i swap` line before the script’s final `swapoff`.
 
 ## FPR (free page reporting)
 
