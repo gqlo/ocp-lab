@@ -11,20 +11,21 @@ Cluster / lab environment and install path for the memory-tiering feature stack
 <!-- markdown-toc start - Don't edit this section. Run M-x markdown-toc-refresh-toc -->
 **Table of Contents**
 
+- [Memory tiering — env and install](#memory-tiering--env-and-install)
   - [Catalog](#catalog)
   - [Goal](#goal)
   - [Cluster installation](#cluster-installation)
-  - [Worker SSH (bastion key)](#worker-ssh-bastion-key)
-    - [`worker-ssh-key-mcp.yaml`](#worker-ssh-key-mcpyaml)
-    - [Verify](#verify)
   - [Environment](#environment)
-  - [CNV installation](#cnv-installation)
-  - [LVMCluster (LVMS / SSD)](#lvmcluster-lvms--ssd)
-    - [LVMCluster CR](#lvmcluster-cr)
-    - [Verify](#verify-1)
-  - [Autopilot wiring](#autopilot-wiring)
+    - [Worker SSH (bastion key)](#worker-ssh-bastion-key)
+      - [`worker-ssh-key-mcp.yaml`](#worker-ssh-key-mcpyaml)
+      - [Verify](#verify)
+    - [CNV installation](#cnv-installation)
+    - [LVMCluster (LVMS / SSD)](#lvmcluster-lvms--ssd)
+      - [LVMCluster CR](#lvmcluster-cr)
+      - [Verify](#verify-1)
+  - [Autopilot](#autopilot)
     - [List features on the cluster](#list-features-on-the-cluster)
-  - [Setup swap](#setup-swap)
+  - [SWAP](#swap)
   - [FPR (free page reporting)](#fpr-free-page-reporting)
     - [Verify from HCO operator config](#verify-from-hco-operator-config)
     - [Verify from the guest](#verify-from-the-guest)
@@ -39,6 +40,7 @@ Cluster / lab environment and install path for the memory-tiering feature stack
     - [Policy / Prometheus metrics](#policy--prometheus-metrics)
     - [Verify](#verify-2)
   - [Alerting dashboard (KContext)](#alerting-dashboard-kcontext)
+
 <!-- markdown-toc end -->
 
 ---
@@ -54,7 +56,25 @@ Bare-metal OpenShift for this lab is installed with **[Jetlag](https://github.co
 
 Local notes on Jetlag failures: [troubleshooting/jetlag/](../../troubleshooting/jetlag/).
 
-## Worker SSH (bastion key)
+## Environment
+
+Captured from `oc` against `api.vlan615.rdu2.scalelab.redhat.com` (2026-10-13).
+
+| Item | Value |
+| ---- | ----- |
+| Cluster / lab | Scale Lab RDU2 — **vlan615** (`vlan615.rdu2.scalelab.redhat.com`); API `https://api.vlan615.rdu2.scalelab.redhat.com:6443` |
+| OpenShift | Server **4.22.17** (Available); client 4.22.9 |
+| Kubernetes | v1.35.8 |
+| Nodes | 3 masters + 9 workers (all Ready); MCP master/worker Updated |
+| CNV / HCO | OpenShift Virtualization **4.22.12** (`kubevirt-hyperconverged-operator.v4.22.12`, Phase Succeeded); HCO `Available=True` |
+| Nodes (CPU) | 112 CPUs/node (workers); 2× Intel Xeon Gold 5420+ (28 cores/socket, SMT), 2 NUMA nodes, VT-x |
+| Nodes (disk) | On `d37-h14-000-r660`: OS `sda` 446G; 2× SCSI SSD **1.7T** (`sdb` LVMS, `sdc` unused); 1× NVMe **2.9T** (`nvme0n1`) |
+| Nodes (RAM) | **~503Gi** / node (`free -h` on worker); swap **not enabled** (0B) before autopilot / swap-enable |
+| Storage | LVMS **4.22.0** — SSD device class on `d37-h14-000-r660` (see below) |
+| Autopilot | `virt-platform-autopilot` Ready; HCO annotation `platform.kubevirt.io/autopilot=descheduler-loadaware` (2026-10-19) |
+| Descheduler | Operator **5.4.3**; `KubeDescheduler/cluster` Managed, profile `KubeVirtRelieveAndMigrate`, mode Automatic; workers have `psi=1` |
+
+### Worker SSH (bastion key)
 
 After install, inject the **bastion** (`f24-h03-000-r670`) root SSH public key into the `core` user on all **workers** via MachineConfig so you can `ssh core@<worker>` from the bastion (e.g. for `free -h`, disk checks).
 
@@ -72,7 +92,7 @@ oc apply -f worker-ssh-key-mcp.yaml
 oc get mcp worker   # wait until UPDATED=True
 ```
 
-### `worker-ssh-key-mcp.yaml`
+#### `worker-ssh-key-mcp.yaml`
 
 Paste the bastion public key into `sshAuthorizedKeys` (do not commit real keys to git). On vlan615 this was applied as `99-worker-ssh-key` from `root@f24-h03-000-r670`.
 
@@ -94,7 +114,7 @@ spec:
             - "<bastion-public-key>"
 ```
 
-### Verify
+#### Verify
 
 ```bash
 oc get mc 99-worker-ssh-key
@@ -104,25 +124,7 @@ ssh -o StrictHostKeyChecking=accept-new core@d37-h14-000-r660 free -h
 
 Example (vlan615): MCP `worker` Updated=True, 9/9 ready after the MC rolled out.
 
-## Environment
-
-Captured from `oc` against `api.vlan615.rdu2.scalelab.redhat.com` (2026-10-13).
-
-| Item | Value |
-| ---- | ----- |
-| Cluster / lab | Scale Lab RDU2 — **vlan615** (`vlan615.rdu2.scalelab.redhat.com`); API `https://api.vlan615.rdu2.scalelab.redhat.com:6443` |
-| OpenShift | Server **4.22.17** (Available); client 4.22.9 |
-| Kubernetes | v1.35.8 |
-| Nodes | 3 masters + 9 workers (all Ready); MCP master/worker Updated |
-| CNV / HCO | OpenShift Virtualization **4.22.12** (`kubevirt-hyperconverged-operator.v4.22.12`, Phase Succeeded); HCO `Available=True` |
-| Nodes (CPU) | 112 CPUs/node (workers); 2× Intel Xeon Gold 5420+ (28 cores/socket, SMT), 2 NUMA nodes, VT-x |
-| Nodes (disk) | On `d37-h14-000-r660`: OS `sda` 446G; 2× SCSI SSD **1.7T** (`sdb` LVMS, `sdc` unused); 1× NVMe **2.9T** (`nvme0n1`) |
-| Nodes (RAM) | **~503Gi** / node (`free -h` on worker); swap **not enabled** (0B) before autopilot / swap-enable |
-| Storage | LVMS **4.22.0** — SSD device class on `d37-h14-000-r660` (see below) |
-| Autopilot | `virt-platform-autopilot` Ready; HCO annotation `platform.kubevirt.io/autopilot=descheduler-loadaware` (2026-10-19) |
-| Descheduler | Operator **5.4.3**; `KubeDescheduler/cluster` Managed, profile `KubeVirtRelieveAndMigrate`, mode Automatic; workers have `psi=1` |
-
-## CNV installation
+### CNV installation
 
 Install **OpenShift Virtualization** from Software Catalog in the OpenShift console (UI).
 Create the `HyperConverged` instance with the console defaults (or equivalent) so CNV
@@ -146,7 +148,7 @@ kubevirt-hyperconverged   22m
 # including virt-handler on each node and virt-platform-autopilot
 ```
 
-## LVMCluster (LVMS / SSD)
+### LVMCluster (LVMS / SSD)
 
 Install the LVM Storage operator from Software Catalog in the OpenShift console (UI), then apply the `LVMCluster` CR below.
 LVMS `LVMCluster` binding a single SCSI SSD path to hostname `d37-h14-000-r660`.
@@ -166,7 +168,7 @@ Captured from bastion/workdir `f24-h03-000-r670` (`lvm/lvmcluster.yaml`).
 Prefer stable `/dev/disk/by-path/...` over `/dev/sdX` so the VG survives reboots /
 re-enumeration.
 
-### LVMCluster CR
+#### LVMCluster CR
 
 ```yaml
 apiVersion: lvm.topolvm.io/v1alpha1
@@ -200,7 +202,7 @@ Generic / multi-node examples also live under
 [`resources/templates/lvm/lvmcluster.yaml`](../../resources/templates/lvm/lvmcluster.yaml)
 and [`multi-pool.yaml`](../../resources/templates/lvm/multi-pool.yaml).
 
-### Verify
+#### Verify
 
 ```bash
 oc get csv -n openshift-lvm-storage
@@ -255,7 +257,7 @@ nvme0n1   2.9T disk
 
 `sdb` is `LVM2_member` under VG `lvm-d37-h14-000-r660-ssd-storage` (full free — no LVs yet). `sdc` / `nvme0n1` unused.
 
-## Autopilot wiring
+## Autopilot
 
 Overview and enablement (OpenShift Virtualization 4.22 developer preview):
 
@@ -388,7 +390,7 @@ Resulting HCO annotations:
 
 Autopilot then installs/reconciles the Kube Descheduler Operator and related objects (labeled `platform.kubevirt.io/managed-by: virt-platform-autopilot`). See [Descheduler (load-aware)](#descheduler-load-aware).
 
-## Setup swap
+## SWAP
 
 Run this script from the bastion. It requires ssh to have been set up;
 if it isn't, it wouldn't be hard to modify this script to use `oc
