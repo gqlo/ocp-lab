@@ -1,6 +1,6 @@
 # Memory tiering — env and install
 
-**Last Updated:** 2026-10-19
+**Last Updated:** 2026-10-26
 
 Cluster / lab environment and install path for the memory-tiering feature stack
 (swap, KSM zero pages, FPR, descheduler, autopilot).
@@ -23,8 +23,15 @@ Cluster / lab environment and install path for the memory-tiering feature stack
   - [LVMCluster (LVMS / SSD)](#lvmcluster-lvms--ssd)
     - [LVMCluster CR](#lvmcluster-cr)
     - [Verify](#verify-1)
-  - [Setup swap](#setup-swap)
   - [Autopilot wiring](#autopilot-wiring)
+  - [Setup swap](#setup-swap)
+  - [FPR (free page reporting)](#fpr-free-page-reporting)
+    - [Verify from HCO operator config](#verify-from-hco-operator-config)
+    - [Verify from the guest](#verify-from-the-guest)
+  - [KSM (kernel samepage merging)](#ksm-kernel-samepage-merging)
+    - [Before enable (baseline)](#before-enable-baseline)
+    - [Enable via HCO](#enable-via-hco)
+    - [After enable](#after-enable)
   - [Descheduler (load-aware)](#descheduler-load-aware)
     - [Enable via autopilot](#enable-via-autopilot)
     - [KubeDescheduler instance](#kubedescheduler-instance)
@@ -249,6 +256,45 @@ nvme0n1   2.9T disk
 
 `sdb` is `LVM2_member` under VG `lvm-d37-h14-000-r660-ssd-storage` (full free — no LVs yet). `sdc` / `nvme0n1` unused.
 
+## Autopilot wiring
+
+Overview and enablement (OpenShift Virtualization 4.22 developer preview):
+
+- [Introducing virtualization platform autopilot](https://developers.redhat.com/articles/2026/05/07/introducing-virtualization-platform-autopilot) (Red Hat Developer, 2026-05-07)
+
+Opt in on the HyperConverged CR (`platform.kubevirt.io/autopilot` annotation). Feature flags include `swap-enable`, `descheduler-loadaware`, `prometheus-alerts`, and others; use `true` for all features, or a comma-separated subset. Dry-run via `virt-platform-autopilot` `/debug/render` is covered in the same article.
+
+Baseline on vlan615 (before enable, 2026-10-13):
+
+```bash
+oc get deploy virt-platform-autopilot -n openshift-cnv
+oc get hco kubevirt-hyperconverged -n openshift-cnv -o jsonpath='{.metadata.annotations}{"\n"}'
+```
+
+```text
+NAME                      READY   UP-TO-DATE   AVAILABLE   AGE
+virt-platform-autopilot   1/1     1            1           23m
+
+{"deployOVS":"false"}   # no platform.kubevirt.io/autopilot annotation yet
+```
+
+On vlan615 (2026-10-19) only **descheduler-loadaware** was enabled via autopilot
+so far (swap still pending there; FPR is HCO default; KSM is configured on HCO
+directly — see [KSM](#ksm-kernel-samepage-merging)):
+
+```bash
+oc annotate hyperconverged kubevirt-hyperconverged -n openshift-cnv \
+  platform.kubevirt.io/autopilot=descheduler-loadaware --overwrite
+```
+
+Resulting HCO annotations:
+
+```text
+{"deployOVS":"false","platform.kubevirt.io/autopilot":"descheduler-loadaware"}
+```
+
+Autopilot then installs/reconciles the Kube Descheduler Operator and related objects (labeled `platform.kubevirt.io/managed-by: virt-platform-autopilot`). See [Descheduler (load-aware)](#descheduler-load-aware).
+
 ## Setup swap
 
 Run this script from the bastion. It requires ssh to have been set up;
@@ -372,42 +418,227 @@ for node in "${nodes[@]}" ; do
 done
 ```
 
-## Autopilot wiring
+## FPR (free page reporting)
 
-Overview and enablement (OpenShift Virtualization 4.22 developer preview):
+**Free page reporting (FPR)** is a guest-cooperative reclaim path: the guest OS
+(via the virtio balloon driver) tells the hypervisor which pages it has already
+freed. The host can then drop the backing RAM and reuse it for other workloads,
+without classic balloon inflate/deflate. On OpenShift Virtualization it is
+enabled by default for eligible VMs (Linux guest kernel ≥ 5.7 with virtio
+balloon).
 
-- [Introducing virtualization platform autopilot](https://developers.redhat.com/articles/2026/05/07/introducing-virtualization-platform-autopilot) (Red Hat Developer, 2026-05-07)
-
-Opt in on the HyperConverged CR (`platform.kubevirt.io/autopilot` annotation). Feature flags include `swap-enable`, `descheduler-loadaware`, `prometheus-alerts`, and others; use `true` for all features, or a comma-separated subset. Dry-run via `virt-platform-autopilot` `/debug/render` is covered in the same article.
-
-Baseline on vlan615 (before enable, 2026-10-13):
+### Verify from HCO operator config
 
 ```bash
-oc get deploy virt-platform-autopilot -n openshift-cnv
-oc get hco kubevirt-hyperconverged -n openshift-cnv -o jsonpath='{.metadata.annotations}{"\n"}'
+oc get hyperconverged kubevirt-hyperconverged -n openshift-cnv \
+  -o jsonpath='{.spec.virtualization.virtualMachineOptions.disableFreePageReporting}{"\n"}'
+
+oc get hyperconverged kubevirt-hyperconverged -n openshift-cnv \
+  -o jsonpath='{.spec.virtualization.virtualMachineOptions}{"\n"}'
+```
+
+Example output (vlan615, 2026-10-26):
+
+```text
+false
+{"disableFreePageReporting":false,"disableSerialConsoleLog":false}
+```
+
+`disableFreePageReporting: false` → FPR enabled cluster-wide for eligible VMs.
+
+### Verify from the guest
+
+On `rhel9-dsverify2-1` (vlan615, 2026-10-26):
+
+```text
+[root@rhel9-dsverify2-1 ~]# uname -r
+5.14.0-687.5.1.el9_8.x86_64
+[root@rhel9-dsverify2-1 ~]# lsmod | grep virtio_balloon
+virtio_balloon         28672  0
+[root@rhel9-dsverify2-1 ~]# ls -l /sys/bus/virtio/drivers/virtio_balloon/
+total 0
+--w-------. 1 root root 4096 Oct 26 16:45 bind
+lrwxrwxrwx. 1 root root    0 Oct 26 16:45 module -> ../../../../module/virtio_balloon
+--w-------. 1 root root 4096 Oct 23 11:22 uevent
+--w-------. 1 root root 4096 Oct 26 16:45 unbind
+lrwxrwxrwx. 1 root root    0 Oct 26 16:45 virtio5 -> ../../../../devices/pci0000:00/0000:00:03.0/0000:09:00.0/virtio5
+[root@rhel9-dsverify2-1 ~]# FEATURES=$(cat /sys/bus/virtio/drivers/virtio_balloon/virtio*/features)
+echo "features=$FEATURES"
+echo "VIRTIO_BALLOON_F_REPORTING (bit 5)=${FEATURES:5:1}"
+features=0100010000000000000000000000110010000000100000000000000000000000
+VIRTIO_BALLOON_F_REPORTING (bit 5)=1
+[root@rhel9-dsverify2-1 ~]# cat /sys/module/page_reporting/parameters/page_reporting_order
+9
+```
+
+- Kernel `5.14` (≥ 5.7) supports FPR.
+- `virtio_balloon` is loaded and bound to `virtio5`.
+- Sysfs `features` bit **5** (`VIRTIO_BALLOON_F_REPORTING`) is `1` — host and guest
+  negotiated free page reporting (bit 0 is leftmost in that string).
+- `page_reporting_order=9` shows the guest page-reporting framework is active.
+
+References:
+
+- [How to check VIRTIO feature bits inside Linux guests](http://blog.vmsplice.net/2020/05/how-to-check-virtio-feature-bits-inside.html)
+- [Linux `virtio_balloon.h`](https://github.com/torvalds/linux/blob/master/include/uapi/linux/virtio_balloon.h) — `VIRTIO_BALLOON_F_REPORTING` = 5
+- [Kernel free page reporting](https://docs.kernel.org/mm/free_page_reporting.html)
+- [Save memory with Free Page Reporting](https://developers.redhat.com/articles/2024/03/13/save-memory-openshift-virtualization-using-free-page-reporting)
+- [Memory management overview (guest-cooperative reclaim)](https://developers.redhat.com/articles/2026/10/15/red-hat-openshift-virtualization-memory-management-overview#guest-cooperative-memory-reclamation)
+
+## KSM (kernel samepage merging)
+
+**Kernel samepage merging (KSM)** is a host-side dedup path: the kernel scans for
+identical VM memory pages and merges them to free RAM. Unlike FPR, it does not
+need guest cooperation. On CNV 4.22, enable it on `HyperConverged`
+`spec.virtualization.ksmConfiguration` (disabled by default; use only with
+trusted workloads). Autopilot’s 4.22 developer-preview annotation flags do
+**not** include a KSM option (`swap-enable`, `descheduler-loadaware`, etc.), so
+this lab configures KSM directly on the HCO — not via
+`platform.kubevirt.io/autopilot`. Docs:
+[Activating KSM](https://docs.redhat.com/en/documentation/openshift_container_platform/4.18/html/virtualization/nodes#virt-activating-ksm),
+[KubeVirt KSM](https://kubevirt.io/user-guide/cluster_admin/ksm/).
+
+### Before enable (baseline)
+
+vlan615 (2026-10-26), before setting `ksmConfiguration`:
+
+HCO has no usable KSM selector (`{}` or unset — nil `nodeLabelSelector` means
+KSM on **no** nodes; only `nodeLabelSelector: {}` enables all nodes):
+
+```bash
+oc get hyperconverged kubevirt-hyperconverged -n openshift-cnv \
+  -o jsonpath='{.spec.virtualization.ksmConfiguration}{"\n"}'
 ```
 
 ```text
-NAME                      READY   UP-TO-DATE   AVAILABLE   AGE
-virt-platform-autopilot   1/1     1            1           23m
-
-{"deployOVS":"false"}   # no platform.kubevirt.io/autopilot annotation yet
+{}
 ```
 
-On vlan615 (2026-10-19) only **descheduler-loadaware** was enabled so far (swap / KSM / FPR still pending):
+Workers report KSM not enabled:
 
 ```bash
-oc annotate hyperconverged kubevirt-hyperconverged -n openshift-cnv \
-  platform.kubevirt.io/autopilot=descheduler-loadaware --overwrite
+oc get nodes -l node-role.kubernetes.io/worker \
+  -L kubevirt.io/ksm-enabled,kubevirt.io/ksm-handler-managed
 ```
-
-Resulting HCO annotations:
 
 ```text
-{"deployOVS":"false","platform.kubevirt.io/autopilot":"descheduler-loadaware"}
+NAME               STATUS   ROLES    AGE   VERSION   KSM-ENABLED   KSM-HANDLER-MANAGED
+d35-h26-000-r660   Ready    worker   13d   v1.35.8   false
+d35-h27-000-r660   Ready    worker   13d   v1.35.8   false
+d36-h02-000-r660   Ready    worker   13d   v1.35.8   false
+d36-h03-000-r660   Ready    worker   13d   v1.35.8   false
+d36-h04-000-r660   Ready    worker   13d   v1.35.8   false
+d36-h07-000-r660   Ready    worker   13d   v1.35.8   false
+d36-h08-000-r660   Ready    worker   13d   v1.35.8   false
+d36-h20-000-r660   Ready    worker   13d   v1.35.8   false
+d37-h14-000-r660   Ready    worker   13d   v1.35.8   false
 ```
 
-Autopilot then installs/reconciles the Kube Descheduler Operator and related objects (labeled `platform.kubevirt.io/managed-by: virt-platform-autopilot`). See [Descheduler (load-aware)](#descheduler-load-aware).
+On the host (`d36-h07-000-r660`), KSM is off and has merged nothing:
+
+```text
+lguoqing@lguoqing-thinkpadp1gen7:~$ oc debug node/d36-h07-000-r660
+Starting pod/d36-h07-000-r660-debug-2lsl5 ...
+To use host binaries, run `chroot /host`. Instead, if you need to access host namespaces, run `nsenter -a -t 1`.
+Pod IP: 10.1.62.13
+All commands and output from this session will be recorded in container logs, including credentials and sensitive information passed through the command prompt.
+If you don't see a command prompt, try pressing enter.
+sh-5.1# chroot /host
+sh-5.1# cat /sys/kernel/mm/ksm/run
+0
+sh-5.1# cat /sys/kernel/mm/ksm/pages_shared
+0
+sh-5.1# cat /sys/kernel/mm/ksm/pages_sharing
+0
+```
+
+- `run=0` → kernel KSM disabled on the node.
+- `pages_shared` / `pages_sharing` = `0` → no merged pages yet.
+
+### Enable via HCO
+
+Enable CNV KSM activation on all nodes (`nodeLabelSelector: {}`). On CNV 4.22
+the field is under `spec.virtualization` (not top-level `spec.ksmConfiguration`):
+
+```bash
+oc patch hyperconverged kubevirt-hyperconverged -n openshift-cnv --type=merge \
+  -p '{"spec":{"virtualization":{"ksmConfiguration":{"nodeLabelSelector":{}}}}}'
+```
+
+Confirm HCO and the KubeVirt CR both show `{"nodeLabelSelector":{}}`:
+
+```bash
+oc get hyperconverged kubevirt-hyperconverged -n openshift-cnv \
+  -o jsonpath='{.spec.virtualization.ksmConfiguration}{"\n"}'
+
+oc get kubevirt kubevirt-kubevirt-hyperconverged -n openshift-cnv \
+  -o jsonpath='{.spec.configuration.ksmConfiguration}{"\n"}'
+```
+
+### After enable
+
+vlan615 (2026-10-26), after the patch above:
+
+```bash
+oc get hyperconverged kubevirt-hyperconverged -n openshift-cnv \
+  -o jsonpath='{.spec.virtualization.ksmConfiguration}{"\n"}'
+oc get kubevirt kubevirt-kubevirt-hyperconverged -n openshift-cnv \
+  -o jsonpath='{.spec.configuration.ksmConfiguration}{"\n"}'
+```
+
+```text
+{"nodeLabelSelector":{}}
+{"nodeLabelSelector":{}}
+```
+
+Workers are labeled for KubeVirt-managed KSM:
+
+```bash
+oc get nodes -l node-role.kubernetes.io/worker -L kubevirt.io/ksm-enabled
+```
+
+```text
+NAME               STATUS   ROLES    AGE   VERSION   KSM-ENABLED
+d35-h26-000-r660   Ready    worker   13d   v1.35.8   true
+d35-h27-000-r660   Ready    worker   13d   v1.35.8   true
+d36-h02-000-r660   Ready    worker   13d   v1.35.8   true
+d36-h03-000-r660   Ready    worker   13d   v1.35.8   true
+d36-h04-000-r660   Ready    worker   13d   v1.35.8   true
+d36-h07-000-r660   Ready    worker   13d   v1.35.8   true
+d36-h08-000-r660   Ready    worker   13d   v1.35.8   true
+d36-h20-000-r660   Ready    worker   13d   v1.35.8   true
+d37-h14-000-r660   Ready    worker   13d   v1.35.8   true
+```
+
+`kubevirt.io/ksm-enabled=true` means the node is **configured** for CNV/KubeVirt
+KSM (eligible for pressure-based activation), not that `ksmd` is running right
+now ([KubeVirt PR #11306](https://github.com/kubevirt/kubevirt/pull/11306):
+label reflects managed/configured, not the live `run` value). OpenShift docs
+state CNV activates KSM **when nodes experience memory overload**
+([Activating KSM](https://docs.redhat.com/en/documentation/openshift_container_platform/4.18/html/virtualization/nodes#virt-activating-ksm);
+[4.15 release notes](https://docs.redhat.com/en/documentation/openshift_container_platform/4.15/html/virtualization/release-notes)).
+Upstream enables `ksmd` under pressure only
+([PR #10477](https://github.com/kubevirt/kubevirt/pull/10477)).
+With plenty of free RAM, host sysfs can still show idle:
+
+```bash
+oc debug node/d36-h07-000-r660 -- chroot /host bash -c \
+  'echo run=$(cat /sys/kernel/mm/ksm/run); echo shared=$(cat /sys/kernel/mm/ksm/pages_shared); echo sharing=$(cat /sys/kernel/mm/ksm/pages_sharing)'
+```
+
+```text
+run=0
+shared=0
+sharing=0
+```
+
+- Label `true` + HCO `nodeLabelSelector: {}` → enable succeeded (feature armed).
+- `run=0` / `pages_*=0` → expected until the node is under memory pressure; then
+  expect `run=1` and rising `pages_shared` / `pages_sharing`.
+- Annotation `kubevirt.io/ksm-handler-managed` is set when virt-handler has
+  actually flipped KSM on under overload (see same
+  [Activating KSM](https://docs.redhat.com/en/documentation/openshift_container_platform/4.18/html/virtualization/nodes#virt-activating-ksm)
+  label notes).
 
 ## Descheduler (load-aware)
 
@@ -735,4 +966,12 @@ Reachable from the lab network. Service install/ops: `KContext/utils/install-kco
 ## References
 
 - [Red Hat OpenShift Virtualization memory management overview](https://developers.redhat.com/articles/2026/10/15/red-hat-openshift-virtualization-memory-management-overview#scheduler_memory_handling_and_reservations) — (2026-10-15)
+- [Save memory with OpenShift Virtualization using Free Page Reporting](https://developers.redhat.com/articles/2024/03/13/save-memory-openshift-virtualization-using-free-page-reporting) — (2024-03-13)
+- [Kernel free page reporting](https://docs.kernel.org/mm/free_page_reporting.html)
+- [How to check VIRTIO feature bits inside Linux guests](http://blog.vmsplice.net/2020/05/how-to-check-virtio-feature-bits-inside.html)
+- [Activating kernel samepage merging (KSM)](https://docs.redhat.com/en/documentation/openshift_container_platform/4.18/html/virtualization/nodes#virt-activating-ksm) — OCP: activate on memory overload; `ksm-handler-managed` when CNV flips KSM on
+- [OpenShift Virtualization 4.15 release notes (KSM)](https://docs.redhat.com/en/documentation/openshift_container_platform/4.15/html/virtualization/release-notes) — activate KSM when a node is overloaded
+- [KubeVirt KSM Management](https://kubevirt.io/user-guide/cluster_admin/ksm/)
+- [KubeVirt PR #10477 — KSM according to memory pressure](https://github.com/kubevirt/kubevirt/pull/10477)
+- [KubeVirt PR #11306 — `ksm-enabled` label = managed/configured, not live `run`](https://github.com/kubevirt/kubevirt/pull/11306)
 - [Introducing virtualization platform autopilot](https://developers.redhat.com/articles/2026/05/07/introducing-virtualization-platform-autopilot) — (2026-05-07)
