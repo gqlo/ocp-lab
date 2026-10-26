@@ -23,20 +23,21 @@ Cluster / lab environment and install path for the memory-tiering feature stack
     - [List features on the cluster](#list-features-on-the-cluster)
   - [SWAP](#swap)
     - [Create partition](#create-partition)
+    - [Enable via Autopilot](#enable-via-autopilot)
     - [Verify swap is enabled](#verify-swap-is-enabled)
   - [FPR (free page reporting)](#fpr-free-page-reporting)
     - [Verify from HCO operator config](#verify-from-hco-operator-config)
     - [Verify from the guest](#verify-from-the-guest)
   - [KSM (kernel samepage merging)](#ksm-kernel-samepage-merging)
     - [Before enable (baseline)](#before-enable-baseline)
-    - [Enable via Autopilot](#enable-via-autopilot)
+    - [Enable via Autopilot](#enable-via-autopilot-1)
     - [After enable](#after-enable)
   - [Descheduler (load-aware)](#descheduler-load-aware)
-    - [Enable via autopilot](#enable-via-autopilot-1)
+    - [Enable via autopilot](#enable-via-autopilot-2)
     - [KubeDescheduler instance](#kubedescheduler-instance)
     - [PSI kernel argument](#psi-kernel-argument)
     - [Policy / Prometheus metrics](#policy--prometheus-metrics)
-    - [Verify](#verify-2)
+    - [Verify](#verify)
   - [Alerting dashboard (KContext)](#alerting-dashboard-kcontext)
 
 <!-- markdown-toc end -->
@@ -521,6 +522,42 @@ done
 
 Optional: pass node names as args; otherwise all workers from `oc get node`.
 
+### Enable via Autopilot
+
+Swap Enablement (`swap-enable` asset) has `install: always` and `opt_in: null`
+— it is applied automatically once the autopilot framework is opted in (no
+extra feature annotation needed). Adding `swap-enable` to the subset name has
+no effect; it only needs the framework annotation to include any value that
+activates autopilot (e.g. `descheduler-loadaware` or `true`).
+
+```bash
+# If not already set, opt in to the autopilot framework:
+oc annotate hyperconverged kubevirt-hyperconverged -n openshift-cnv \
+  platform.kubevirt.io/autopilot=descheduler-loadaware --overwrite
+```
+
+Autopilot then applies MachineConfig `90-worker-swap-online` (labeled
+`platform.kubevirt.io/managed-by=virt-platform-autopilot`) which enables swap
+persistently on workers. The worker MCP rolls out (reboot required); after
+that, `swapon --show` shows the OCPSWAP partition permanently active.
+
+Confirm MachineConfig and MCP:
+
+```bash
+oc get mc 90-worker-swap-online --show-labels
+oc get mcp worker
+```
+
+Example output (vlan615, 2026-10-19):
+
+```text
+NAME                    GENERATEDBYCONTROLLER   IGNITIONVERSION   AGE   LABELS
+90-worker-swap-online                           3.5.0             10d   machineconfiguration.openshift.io/role=worker,platform.kubevirt.io/managed-by=virt-platform-autopilot
+
+NAME     CONFIG                                             UPDATED   UPDATING   DEGRADED   MACHINECOUNT   READYMACHINECOUNT   UPDATEDMACHINECOUNT   DEGRADEDMACHINECOUNT   AGE
+worker   rendered-worker-...                               True      False      False      9              9                   9                     0                      13d
+```
+
 ### Verify swap is enabled
 
 **Partition present** (after create; swap may still be off if the script’s
@@ -542,13 +579,15 @@ nvme0n1                                                                         
 `-nvme0n1p1                                                                         2.9T part swap        OCPSWAP
 ```
 
-**Swap active** (after `swapon`, or after autopilot `swap-enable` leaves it on):
+**Swap active** (after autopilot `swap-enable` MachineConfig applied and worker
+rebooted — not from the create script's transient smoke test, which calls
+`swapoff` before exiting):
 
 ```bash
 ssh core@d37-h14-000-r660 sudo bash -c 'swapon --show; free -h; cat /proc/swaps'
 ```
 
-Example output (same node, 2026-10-26 — swap **on**):
+Example output (same node, 2026-10-26 — swap **on** after autopilot rollout):
 
 ```text
 NAME           TYPE      SIZE  USED PRIO
@@ -562,9 +601,9 @@ Filename				Type		Size		Used		Priority
 /dev/nvme0n1p1                          partition	3125615936	14848		100
 ```
 
-`PARTLABEL=OCPSWAP` on `nvme0n1p1` (2.9T); `swapon` / `free` show **2.9Ti** swap in use
-(small USED is fine). During the create script’s smoke test only, expect a
-non-zero `free | grep -i swap` line before the script’s final `swapoff`.
+`PARTLABEL=OCPSWAP` on `nvme0n1p1` (2.9T); `swapon` / `free` show **2.9Ti** swap active
+(small USED is normal). After the create script’s smoke test only — before
+autopilot’s MC applies — `swapon --show` returns empty (script ends with `swapoff`).
 
 ## FPR (free page reporting)
 
@@ -696,16 +735,18 @@ sh-5.1# cat /sys/kernel/mm/ksm/pages_sharing
 
 ### Enable via Autopilot
 
-Two annotations are required (`/debug/features`:
-`platform.kubevirt.io/enable-ksm-zero-only=true`, plus
-`hcoUnconfigured:spec.virtualization.ksmConfiguration`):
+Three things must be true (from `/debug/features`:
+`opt_in: platform.kubevirt.io/enable-ksm-zero-only=true, hcoUnconfigured:spec.virtualization.ksmConfiguration`):
 
-1. Put the **`ksm-zero-only`** feature group in
-   `platform.kubevirt.io/autopilot` (comma-separated with any other groups, or
-   use `true` for all). The enable annotation alone is **not** enough when
-   autopilot is pinned to a subset such as `descheduler-loadaware` — render
-   may list the assets as `INCLUDED`, but reconcile will not apply them.
-2. Set **`platform.kubevirt.io/enable-ksm-zero-only=true`**.
+1. **`ksm-zero-only` in the autopilot subset** — add it to
+   `platform.kubevirt.io/autopilot` (comma-separated, or use `true` for all).
+   The feature opt-in annotation alone is **not** enough when autopilot is
+   pinned to a named subset such as `descheduler-loadaware` — the assets appear
+   `INCLUDED` in `/debug/render` but reconcile will not apply them.
+2. **`platform.kubevirt.io/enable-ksm-zero-only=true`** annotation on HCO.
+3. **`spec.virtualization.ksmConfiguration` must be absent** on the HCO CR
+   (`hcoUnconfigured` is a precondition on existing cluster state, not an
+   annotation to set — do not patch this field).
 
 ```bash
 # If classic HCO KSM was set earlier, remove it first:
