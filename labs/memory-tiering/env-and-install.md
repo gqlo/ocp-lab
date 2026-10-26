@@ -11,7 +11,6 @@ Cluster / lab environment and install path for the memory-tiering feature stack
 <!-- markdown-toc start - Don't edit this section. Run M-x markdown-toc-refresh-toc -->
 **Table of Contents**
 
-- [Memory tiering — env and install](#memory-tiering--env-and-install)
   - [Catalog](#catalog)
   - [Goal](#goal)
   - [Cluster installation](#cluster-installation)
@@ -24,6 +23,7 @@ Cluster / lab environment and install path for the memory-tiering feature stack
     - [LVMCluster CR](#lvmcluster-cr)
     - [Verify](#verify-1)
   - [Autopilot wiring](#autopilot-wiring)
+    - [List features on the cluster](#list-features-on-the-cluster)
   - [Setup swap](#setup-swap)
   - [FPR (free page reporting)](#fpr-free-page-reporting)
     - [Verify from HCO operator config](#verify-from-hco-operator-config)
@@ -39,7 +39,6 @@ Cluster / lab environment and install path for the memory-tiering feature stack
     - [Policy / Prometheus metrics](#policy--prometheus-metrics)
     - [Verify](#verify-2)
   - [Alerting dashboard (KContext)](#alerting-dashboard-kcontext)
-
 <!-- markdown-toc end -->
 
 ---
@@ -262,7 +261,99 @@ Overview and enablement (OpenShift Virtualization 4.22 developer preview):
 
 - [Introducing virtualization platform autopilot](https://developers.redhat.com/articles/2026/05/07/introducing-virtualization-platform-autopilot) (Red Hat Developer, 2026-05-07)
 
-Opt in on the HyperConverged CR (`platform.kubevirt.io/autopilot` annotation). Feature flags include `swap-enable`, `descheduler-loadaware`, `prometheus-alerts`, and others; use `true` for all features, or a comma-separated subset. Dry-run via `virt-platform-autopilot` `/debug/render` is covered in the same article.
+Opt in on the HyperConverged CR (`platform.kubevirt.io/autopilot` annotation).
+Use `true` for all framework features, or a comma-separated subset (e.g.
+`descheduler-loadaware`). The article’s flag names can lag the binary — prefer
+the live endpoints below for this cluster’s catalog.
+
+### List features on the cluster
+
+`virt-platform-autopilot` exposes a debug HTTP server on **:8081** inside the
+pod. Two endpoints matter:
+
+| Endpoint | Use |
+| -------- | --- |
+| `/debug/features` | **Full feature catalog** (names, maturity, `opt_in` annotations, requires) |
+| `/debug/render` | YAML assets in the **current render** only (what would apply now) — not the full menu |
+
+```bash
+AP=$(oc get pod -n openshift-cnv --no-headers | awk '/virt-platform-autopilot/{print $1; exit}')
+
+# Full catalog (authoritative for this image)
+oc exec -n openshift-cnv "$AP" -- curl -s http://127.0.0.1:8081/debug/features
+
+# Current render asset list (subset / context-filtered)
+oc exec -n openshift-cnv "$AP" -- curl -s http://127.0.0.1:8081/debug/render \
+  | grep -E '^# (Asset|Path|Component|Status):'
+```
+
+Or port-forward and curl from the laptop:
+
+```bash
+oc port-forward -n openshift-cnv deploy/virt-platform-autopilot 8081:8081
+curl -s http://localhost:8081/debug/features
+curl -s http://localhost:8081/debug/render | grep '^# Asset:'
+```
+
+Example `/debug/features` excerpt (vlan615, 2026-10-26) — abbreviated:
+
+```yaml
+features:
+- name: Load-Aware Descheduler
+  install: always
+  maturity: TP
+  opt_in: null
+  requires: [Kube Descheduler Operator]
+- name: Swap Enablement
+  install: always
+  maturity: TP
+  opt_in: null
+- name: Observability Enhancements
+  install: always
+  maturity: TP
+  opt_in: null
+  requires: [Cluster Observability Operator]
+- name: Kernel Samepage Merging (KSM) zero pages only
+  install: opt-in
+  maturity: DP
+  opt_in: platform.kubevirt.io/enable-ksm-zero-only=true, hcoUnconfigured:spec.virtualization.ksmConfiguration
+- name: Transparent Huge Pages (THP) Tuning
+  install: opt-in
+  maturity: DP
+  opt_in: platform.kubevirt.io/enable-thp-tuning=true, platform.kubevirt.io/enable-thp-tuning-kernelcore=true
+# ... also: In-Flight Operations, Kubelet Performance, CPU Manager,
+#     KubeVirt Metrics Exporter, MTV, MetalLB, PCI Passthrough
+framework:
+  maturity: DP
+  opt_in: platform.kubevirt.io/autopilot=true
+```
+
+Reading the fields:
+
+- `install: always` — enabled with the autopilot framework (no separate feature
+  annotation); `opt_in: null`.
+- `install: opt-in` — needs the listed `platform.kubevirt.io/enable-…` (and any
+  `requires` / `hcoUnconfigured` constraints).
+- `framework.opt_in` — master switch (`autopilot=true` or a named subset).
+
+Same day, `/debug/render` on this cluster listed only 11 assets (e.g.
+`descheduler-loadaware`, `swap-enable`, `psi-enable`, `prometheus-alerts`,
+dashboards) — useful for dry-run YAML, **incomplete** as a feature inventory.
+Example render headers when annotation is `descheduler-loadaware`:
+
+```text
+# Asset: hco-golden-config
+# Asset: descheduler-loadaware
+# Asset: metrics-service
+# Asset: prometheus-alerts
+# Asset: autopilot-dashboard
+# Asset: descheduler-dashboard
+# Asset: swap-enable
+# Asset: psi-enable
+# Asset: psi-enable-master
+# Asset: metrics-servicemonitor
+# Asset: monitoring-ui-plugin
+```
 
 Baseline on vlan615 (before enable, 2026-10-13):
 
@@ -279,8 +370,10 @@ virt-platform-autopilot   1/1     1            1           23m
 ```
 
 On vlan615 (2026-10-19) only **descheduler-loadaware** was enabled via autopilot
-so far (swap still pending there; FPR is HCO default; KSM is configured on HCO
-directly — see [KSM](#ksm-kernel-samepage-merging)):
+so far (swap still pending via autopilot; FPR is HCO default; classic KSM via
+HCO `ksmConfiguration` — see [KSM](#ksm-kernel-samepage-merging); autopilot also
+offers opt-in **KSM zero pages only** via
+`platform.kubevirt.io/enable-ksm-zero-only=true`):
 
 ```bash
 oc annotate hyperconverged kubevirt-hyperconverged -n openshift-cnv \
@@ -489,12 +582,12 @@ References:
 
 **Kernel samepage merging (KSM)** is a host-side dedup path: the kernel scans for
 identical VM memory pages and merges them to free RAM. Unlike FPR, it does not
-need guest cooperation. On CNV 4.22, enable it on `HyperConverged`
-`spec.virtualization.ksmConfiguration` (disabled by default; use only with
-trusted workloads). Autopilot’s 4.22 developer-preview annotation flags do
-**not** include a KSM option (`swap-enable`, `descheduler-loadaware`, etc.), so
-this lab configures KSM directly on the HCO — not via
-`platform.kubevirt.io/autopilot`. Docs:
+need guest cooperation. This lab enables classic KSM on `HyperConverged`
+`spec.virtualization.ksmConfiguration` (disabled by default; trusted workloads
+only). Autopilot separately advertises opt-in **KSM zero pages only**
+(`platform.kubevirt.io/enable-ksm-zero-only=true`, requiring
+`ksmConfiguration` unconfigured) — see
+[List features on the cluster](#list-features-on-the-cluster). Docs:
 [Activating KSM](https://docs.redhat.com/en/documentation/openshift_container_platform/4.18/html/virtualization/nodes#virt-activating-ksm),
 [KubeVirt KSM](https://kubevirt.io/user-guide/cluster_admin/ksm/).
 
