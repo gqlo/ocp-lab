@@ -1,4 +1,4 @@
-# Memory tiering — env and install
+# Memory tiering — lab setup
 
 **Last Updated:** 2026-10-26
 
@@ -11,7 +11,7 @@ Cluster / lab environment and install path for the memory-tiering feature stack
 <!-- markdown-toc start - Don't edit this section. Run M-x markdown-toc-refresh-toc -->
 **Table of Contents**
 
-- [Memory tiering — env and install](#memory-tiering--env-and-install)
+- [Memory tiering — lab setup](#memory-tiering--lab-setup)
   - [Catalog](#catalog)
   - [Goal](#goal)
   - [Cluster installation](#cluster-installation)
