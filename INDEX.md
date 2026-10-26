@@ -30,6 +30,7 @@ Primary lookup for humans and AI. Prefer matching **symptoms** / error strings f
 | Single-node OCP network tracing | networking | [single-node-ocp-net-tracing](labs/networking/single-node-ocp-network-tracking/single-node-ocp-net-tracing.md) |
 | eBPF / ocp-trace debugging | ebpf | [ebpf README](labs/ebpf/README.md) |
 | PVC vs snapshot vs clone (Ceph) | storage | [pvc-vs-snapshot-clone](labs/storage/pvc-vs-snapshot-clone.md) |
+| CDI DataSource clone vs HTTP import; LVMS HostClone; boot images / default SC | storage | [cdi-datasource-vs-http-import](labs/storage/cdi-datasource-vs-http-import.md) |
 | NetApp Trident NFS SVM setup | storage | [netapp-setup-notes](labs/storage/netapp/netapp-setup-notes.md) |
 | Prometheus cardinality, KME/COO, diskstats, dirty rate | monitoring | [monitoring catalog](labs/monitoring/README.md) |
 | High-scale cluster / ODF config notes | scale | [high-scale-config-notes](labs/scale/high-scale-config-notes.md) |

@@ -1,0 +1,380 @@
+---
+# PR description auto-fill and Claude review for openshift-sre-notes (markdown notes repo).
+# Requires:
+#   - GCP_SA_KEY — full Google service account JSON (service_account_key_data)
+#   - Claude GitHub App (https://github.com/apps/claude) or /install-github-app
+# Both jobs use Vertex AI / Agent Platform (project itpc-ca-f4da0836ff).
+name: Claude Notes Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review]
+
+concurrency:
+  group: claude-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  VERTEX_PROJECT_ID: itpc-ca-f4da0836ff
+  CLOUD_ML_REGION: global
+  VERTEX_MODEL: claude-sonnet-5
+
+jobs:
+  # Job 1: Claude narrative on open; Diff size on open and every push
+  summarize:
+    if: >
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (github.event.action == 'opened' ||
+       github.event.action == 'synchronize' ||
+       github.event.action == 'ready_for_review')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository
+        if: github.event.action == 'opened' || github.event.action == 'ready_for_review'
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Authenticate to Google Cloud
+        if: github.event.action == 'opened' || github.event.action == 'ready_for_review'
+        continue-on-error: true
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up gcloud
+        if: github.event.action == 'opened' || github.event.action == 'ready_for_review'
+        continue-on-error: true
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Get access token
+        if: github.event.action == 'opened' || github.event.action == 'ready_for_review'
+        continue-on-error: true
+        id: gcp-token
+        run: echo "access_token=$(gcloud auth print-access-token)" >> "$GITHUB_OUTPUT"
+
+      - name: Auto-fill PR description
+        uses: actions/github-script@v7
+        env:
+          GCP_ACCESS_TOKEN: ${{ steps.gcp-token.outputs.access_token }}
+          VERTEX_PROJECT_ID: ${{ env.VERTEX_PROJECT_ID }}
+          CLOUD_ML_REGION: ${{ env.CLOUD_ML_REGION }}
+          VERTEX_MODEL: ${{ env.VERTEX_MODEL }}
+        with:
+          script: |
+            const pull_number = context.payload.pull_request.number;
+            const prTitle = context.payload.pull_request.title;
+            const prBody = context.payload.pull_request.body || '';
+            const isOpen = context.payload.action === 'opened' ||
+              context.payload.action === 'ready_for_review';
+
+            const hasContent = prBody.includes('[x]') ||
+              (prBody.includes('## Description') &&
+               prBody.split('## Description')[1]?.split('##')[0]?.replace(/<!--[\s\S]*?-->/g, '').trim().length > 0);
+
+            const SKIP_PATTERNS = [
+              /\.lock$/,
+              /\.(png|jpg|jpeg|gif|webp|svg|ico)$/
+            ];
+            const MAX_DIFF_SIZE = 12000;
+
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number,
+              per_page: 100
+            });
+
+            // Categories match repo layout: notes, supporting assets, index/meta, other.
+            const categorize = (filename) => {
+              const f = filename.replace(/\\/g, '/');
+              if (/(^|\/)(\.cursor|\.github)(\/|$)/.test(f)) return 'other';
+              if (/^(INDEX|AGENTS|README)\.md$/.test(f)) return 'meta';
+              if (
+                /(^|\/)(troubleshooting|runbooks|labs)(\/|$)/.test(f) ||
+                /(^|\/)resources\/blogs(\/|$)/.test(f)
+              ) return 'notes';
+              if (/(^|\/)resources\/(templates|scripts)(\/|$)/.test(f)) return 'resources';
+              if (/\.(md|mdx)$/.test(f)) return 'notes';
+              return 'other';
+            };
+
+            const empty = () => ({ files: 0, add: 0, del: 0 });
+            const cats = { notes: empty(), resources: empty(), meta: empty(), other: empty() };
+            for (const f of files) {
+              const c = cats[categorize(f.filename)];
+              c.files += 1;
+              c.add += f.additions || 0;
+              c.del += f.deletions || 0;
+            }
+            const total = empty();
+            for (const c of Object.values(cats)) {
+              total.files += c.files;
+              total.add += c.add;
+              total.del += c.del;
+            }
+            const line = (label, c) =>
+              `- **${label}:** ${c.files} files, +${c.add} / −${c.del}`;
+            const DIFF_SIZE_START = '<!-- diff-size:start -->';
+            const DIFF_SIZE_END = '<!-- diff-size:end -->';
+            const diffSizeSection = [
+              DIFF_SIZE_START,
+              '## Diff size',
+              line('Notes (troubleshooting / runbooks / labs / blogs)', cats.notes),
+              line('Resources (templates / scripts)', cats.resources),
+              line('Index / meta (INDEX, AGENTS, README)', cats.meta),
+              line('Other', cats.other),
+              line('Total', total),
+              DIFF_SIZE_END
+            ].join('\n');
+
+            const upsertDiffSize = (body) => {
+              const without = (body || '')
+                .replace(/\n?<!-- diff-size:start -->[\s\S]*?<!-- diff-size:end -->/g, '')
+                // Legacy unmarked Diff size: heading + metric bullets only.
+                .replace(/\n?## Diff size\n(?:- \*\*[^\n]*\n?)*/g, '')
+                .trim();
+              const marker = '<!-- This is an auto-generated comment: release notes by coderabbit.ai -->';
+              if (without.includes(marker)) {
+                return without.replace(marker, `${diffSizeSection}\n\n${marker}`);
+              }
+              return without ? `${without}\n\n${diffSizeSection}` : diffSizeSection;
+            };
+
+            let body = prBody;
+            let failReason = null;
+
+            // Narrative Claude fill only when the PR is first opened and empty.
+            // On Claude unavailability/failure, keep the original body and still
+            // run upsertDiffSize below; fail the job afterward if required.
+            if (isOpen && !hasContent) {
+              if (!process.env.GCP_ACCESS_TOKEN) {
+                failReason = 'GCP_SA_KEY secret is not set or GCP auth failed.';
+              } else {
+                const { data: commits } = await github.rest.pulls.listCommits({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number,
+                  per_page: 100
+                });
+                const commitMessages = commits.map(c => `- ${c.commit.message}`).join('\n');
+
+                const reviewable = files.filter(f =>
+                  f.patch &&
+                  !SKIP_PATTERNS.some(p => p.test(f.filename))
+                );
+
+                let diff = '';
+                for (const file of reviewable) {
+                  diff += `=== ${file.filename} (${file.status}, +${file.additions} -${file.deletions}) ===\n${file.patch}\n\n`;
+                }
+                if (diff.length > MAX_DIFF_SIZE) {
+                  diff = diff.substring(0, MAX_DIFF_SIZE) + '\n\n... (diff truncated)';
+                }
+
+                const prompt = [
+                  'Auto-fill a PR description for openshift-sre-notes (OpenShift SRE field notes:',
+                  'markdown troubleshooting notes, runbooks, labs, plus YAML templates and helper scripts).',
+                  'Analyze the title, commits, and diff below.',
+                  '',
+                  `PR Title: ${prTitle}`,
+                  '',
+                  'Commits:',
+                  commitMessages,
+                  '',
+                  'Diff:',
+                  diff,
+                  '',
+                  'Return ONLY markdown with these sections (do NOT add any text before the first ## header):',
+                  '',
+                  '## What type of PR is this?',
+                  'Mark applicable types with [x]: note (new troubleshooting/runbook/lab), fix (correction),',
+                  'index (INDEX/AGENTS/README), resources (templates/scripts), ci, chore',
+                  '(Use format: - [x] `type` - short description)',
+                  '',
+                  '## Description',
+                  '2-4 sentences: what note or asset changed, which domain (networking/storage/virtualization/…),',
+                  'and why (symptom addressed, procedure clarified, lab added, etc.).',
+                  '',
+                  '## Changes Overview',
+                  'Brief bullets by path area: troubleshooting/, runbooks/, labs/, resources/, INDEX.md.',
+                  '',
+                  '## How Has This Been Checked?',
+                  'Mark applicable with [x]: Commands verified on cluster, Links checked, YAML/scripts validated,',
+                  'Manual content review, N/A',
+                  '(Use format: - [x] Item)',
+                  '',
+                  '## Checklist',
+                  'Mark applicable with [x]: self-review, correct folder (troubleshooting vs runbooks vs labs vs resources),',
+                  'INDEX.md updated if a new findable note, related links work, destructive steps called out,',
+                  'no secrets in markdown or YAML',
+                  '(Use format: - [x] Item)'
+                ].join('\n');
+
+                const projectId = process.env.VERTEX_PROJECT_ID;
+                const region = process.env.CLOUD_ML_REGION || 'global';
+                const model = process.env.VERTEX_MODEL;
+                const vertexUrl = region === 'global'
+                  ? `https://aiplatform.googleapis.com/v1/projects/${projectId}/locations/global/publishers/anthropic/models/${model}:rawPredict`
+                  : `https://${region}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${region}/publishers/anthropic/models/${model}:rawPredict`;
+
+                let apiResult;
+                try {
+                  const resp = await fetch(vertexUrl, {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/json',
+                      'Authorization': `Bearer ${process.env.GCP_ACCESS_TOKEN}`
+                    },
+                    body: JSON.stringify({
+                      anthropic_version: 'vertex-2023-10-16',
+                      max_tokens: 2048,
+                      messages: [{ role: 'user', content: prompt }]
+                    })
+                  });
+                  if (!resp.ok) {
+                    const errorText = await resp.text();
+                    throw new Error(`HTTP ${resp.status}: ${errorText}`);
+                  }
+                  apiResult = await resp.json();
+                } catch (e) {
+                  failReason = `Vertex Claude request failed: ${e.message}`;
+                }
+
+                if (!failReason) {
+                  body = apiResult.content?.[0]?.text;
+                  if (!body) {
+                    core.warning('Empty response from Vertex Claude; writing Diff size only');
+                    body = prBody;
+                  } else {
+                    const firstHeaderIdx = body.search(/^## /m);
+                    if (firstHeaderIdx > 0) {
+                      const preamble = body.substring(0, firstHeaderIdx).trim();
+                      body = body.substring(firstHeaderIdx);
+                      if (preamble) {
+                        body = body.replace(/(## Description[^\n]*\n)/, `$1\n${preamble}\n`);
+                      }
+                    }
+                    body = body.replace(/^- \[ \] .+\n?/gm, '');
+                    body = body.replace(/\n{3,}/g, '\n\n').trim();
+                    console.log(`PR #${pull_number} description auto-filled by Claude (Vertex)`);
+                  }
+                }
+              }
+            } else if (isOpen) {
+              console.log('PR body already has content, skipping Claude auto-fill');
+            }
+
+            // If Claude did not replace the body, re-read to avoid clobbering
+            // concurrent edits made after the webhook snapshot.
+            if (body === prBody) {
+              const { data: latest } = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number
+              });
+              body = latest.body || '';
+            }
+
+            body = upsertDiffSize(body);
+
+            await github.rest.pulls.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number,
+              body
+            });
+
+            console.log(`PR #${pull_number} Diff size section updated`);
+
+            if (failReason) {
+              core.warning(failReason);
+            }
+
+  # Job 2: Claude content review (notes / labs / resources)
+  review:
+    needs: [summarize]
+    if: >
+      always() &&
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (needs.summarize.result == 'success' || needs.summarize.result == 'skipped')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Claude Notes Review
+        uses: anthropics/claude-code-action@v1
+        env:
+          ANTHROPIC_VERTEX_PROJECT_ID: ${{ env.VERTEX_PROJECT_ID }}
+          CLOUD_ML_REGION: ${{ env.CLOUD_ML_REGION }}
+        with:
+          use_vertex: "true"
+          track_progress: true
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            Review this openshift-sre-notes pull request. This repo is primarily markdown
+            field notes (troubleshooting, runbooks, labs) plus supporting YAML templates
+            and helper scripts under resources/. It is not an application codebase.
+
+            Focus on:
+            - Content accuracy: OpenShift / ODF / Rook / Ceph / CNV / KubeVirt / OVN commands,
+              API and CR names, oc/kubectl/virtctl flags, and recovery or lab steps
+            - Correct placement per README.md / AGENTS.md:
+              troubleshooting (symptoms → root cause → recovery) vs runbooks (repeatable
+              procedure) vs labs (hands-on how-to) vs resources (templates/scripts/blogs)
+            - New findable notes: INDEX.md row with clear symptoms/keywords; domain folder fits
+            - Structure where expected: Lesson / Symptoms / Root cause / Recovery (troubleshooting)
+              or ordered steps + verify (runbooks)
+            - Links: relative paths to related notes, templates, and scripts resolve; no dangling refs
+            - Safety: destructive ops called out; no secrets/tokens/passwords; sensible defaults in YAML
+            - Clarity: one primary lesson per note; no large YAML duplicated into notes when a
+              resources/templates/ link would do
+
+            Skip binary images and unrelated generated artifacts.
+            Follow AGENTS.md and README.md layout guidance.
+
+            The PR branch is already checked out in the working directory.
+
+            Always report findings — do not stop at inline comments alone.
+            Start the top-level summary with "## 🤖 Claude Notes Review" and post it
+            with `gh pr comment`. The summary MUST include:
+            - Brief overall assessment
+            - **Accuracy** — wrong commands, CR names, product behavior, or recovery steps
+            - **Structure / placement** — wrong content type folder, missing INDEX.md entry,
+              weak symptoms, missing Lesson/Recovery (or equivalent)
+            - **Links & safety** — broken links, secrets, undocumented destructive steps
+            For each item: severity (blocker / major / minor), file path, short why it
+            matters, and a concrete fix hint. If none found in a category, write "None".
+
+            Additionally use `mcp__github_inline_comment__create_inline_comment`
+            (with `confirmed: true`) on specific lines for real accuracy or safety issues —
+            not prose style or naming nits. Inline comments complement the summary; every
+            finding still belongs in the summary list.
+            Do not submit a formal APPROVE or REQUEST CHANGES review event.
+          claude_args: |
+            --model ${{ env.VERTEX_MODEL }}
+            --max-turns 35
+            --allowedTools "Read,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),mcp__github_inline_comment__create_inline_comment"

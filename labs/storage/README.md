@@ -1,12 +1,13 @@
 # Storage labs (Ceph / ODF / NetApp)
 
-**Last Updated:** 2026-09-24
+**Last Updated:** 2026-10-23
 
 ## Catalog
 
 | Doc | Topic |
 | --- | ----- |
 | [pvc-vs-snapshot-clone.md](pvc-vs-snapshot-clone.md) | PVC clone vs snapshot clone behavior inside Ceph (CNV relevance) |
+| [cdi-datasource-vs-http-import.md](cdi-datasource-vs-http-import.md) | CDI DataSource/PVC clone vs HTTP import; LVMS HostClone vs ODF; boot-image default SC |
 | [netapp/netapp-setup-notes.md](netapp/netapp-setup-notes.md) | Trident NFS SVM setup notes + NNCP / backend manifests |
 
 ## Related troubleshooting

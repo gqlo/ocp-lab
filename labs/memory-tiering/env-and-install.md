@@ -731,3 +731,8 @@ Lab instance of [KContext](https://github.com/gqlo/KContext) — Alertmanager al
 | Listen | `:8083` (`LISTEN_ADDR`) |
 
 Reachable from the lab network. Service install/ops: `KContext/utils/install-kcontext.sh` and [KContext docs](https://github.com/gqlo/KContext/blob/main/docs/dashboard.md).
+
+## References
+
+- [Red Hat OpenShift Virtualization memory management overview](https://developers.redhat.com/articles/2026/10/15/red-hat-openshift-virtualization-memory-management-overview#scheduler_memory_handling_and_reservations) — (2026-10-15)
+- [Introducing virtualization platform autopilot](https://developers.redhat.com/articles/2026/05/07/introducing-virtualization-platform-autopilot) — (2026-05-07)
