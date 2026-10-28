@@ -34,7 +34,7 @@ Primary lookup for humans and AI. Prefer matching **symptoms** / error strings f
 | NetApp Trident NFS SVM setup | storage | [netapp-setup-notes](labs/storage/netapp/netapp-setup-notes.md) |
 | Prometheus cardinality, KME/COO, diskstats, dirty rate | monitoring | [monitoring catalog](labs/monitoring/README.md) |
 | High-scale cluster / ODF config notes | scale | [high-scale-config-notes](labs/scale/high-scale-config-notes.md) |
-| CNV memory tiering (swap, KSM, FPR, descheduler, autopilot); KContext alerting dashboard; env / install | virtualization + scale | [memory-tiering env-and-install](labs/memory-tiering/env-and-install.md) |
+| CNV memory tiering (swap, KSM, FPR, descheduler, autopilot); KContext alerting dashboard; env / install | virtualization + scale | [memory-tiering lab-setup](labs/memory-tiering/lab-setup.md) |
 | Fedora CSB bootable USB | os-install | [fedora-csb-installation](labs/os-install/fedora-csb-installation.md) |
 
 ## Blogs
