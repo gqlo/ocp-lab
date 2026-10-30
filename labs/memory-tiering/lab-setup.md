@@ -1,6 +1,6 @@
 # Memory tiering — lab setup
 
-**Last Updated:** 2026-10-26
+**Last Updated:** 2026-10-30
 
 Cluster / lab environment and install path for the memory-tiering feature stack
 (swap, KSM zero pages, FPR, descheduler, autopilot).
@@ -19,6 +19,7 @@ Cluster / lab environment and install path for the memory-tiering feature stack
     - [Worker SSH (bastion key)](#worker-ssh-bastion-key)
     - [CNV installation](#cnv-installation)
     - [LVMCluster (LVMS / SSD)](#lvmcluster-lvms--ssd)
+    - [Cluster upgrade to 5.0](#cluster-upgrade-to-50)
   - [Autopilot](#autopilot)
     - [List features on the cluster](#list-features-on-the-cluster)
   - [SWAP](#swap)
@@ -32,8 +33,11 @@ Cluster / lab environment and install path for the memory-tiering feature stack
     - [Before enable (baseline)](#before-enable-baseline)
     - [Enable via Autopilot](#enable-via-autopilot-1)
     - [After enable](#after-enable)
+  - [THP (transparent huge pages)](#thp-transparent-huge-pages)
+    - [Before enable (baseline)](#before-enable-baseline-1)
+    - [Enable via Autopilot](#enable-via-autopilot-2)
   - [Descheduler (load-aware)](#descheduler-load-aware)
-    - [Enable via autopilot](#enable-via-autopilot-2)
+    - [Enable via autopilot](#enable-via-autopilot-3)
     - [KubeDescheduler instance](#kubedescheduler-instance)
     - [PSI kernel argument](#psi-kernel-argument)
     - [Policy / Prometheus metrics](#policy--prometheus-metrics)
@@ -57,13 +61,13 @@ Local notes on Jetlag failures: [troubleshooting/jetlag/](../../troubleshooting/
 
 ## Environment
 
-Captured from `oc` against `api.vlan615.rdu2.scalelab.redhat.com` (2026-10-13).
+Last updated 2026-10-30 (upgraded to OCP 5.0). Initial capture 2026-10-13 (4.22.17).
 
 | Item | Value |
 | ---- | ----- |
 | Cluster / lab | Scale Lab RDU2 — **vlan615** (`vlan615.rdu2.scalelab.redhat.com`); API `https://api.vlan615.rdu2.scalelab.redhat.com:6443` |
-| OpenShift | Server **4.22.17** (Available); client 4.22.9 |
-| Kubernetes | v1.35.8 |
+| OpenShift | Server **5.0.0** (Available); ~~4.22.17~~ |
+| Kubernetes | v1.36.5 ~~(v1.35.8)~~ |
 | Nodes | 3 masters + 9 workers (all Ready); MCP master/worker Updated |
 | CNV / HCO | OpenShift Virtualization **4.22.12** (`kubevirt-hyperconverged-operator.v4.22.12`, Phase Succeeded); HCO `Available=True` |
 | Nodes (CPU) | 112 CPUs/node (workers); 2× Intel Xeon Gold 5420+ (28 cores/socket, SMT), 2 NUMA nodes, VT-x |
@@ -256,11 +260,24 @@ nvme0n1   2.9T disk
 
 `sdb` is `LVM2_member` under VG `lvm-d37-h14-000-r660-ssd-storage` (full free — no LVs yet). `sdc` / `nvme0n1` unused.
 
+### Cluster upgrade to 5.0
+
+Upgrade was initially blocked by `Upgradeable=False` / `ClusterVersionOverridesSet`.
+See the runbook [cluster-upgrade § Upgradeable=False vs same-minor updates](../../runbooks/cluster-admin/cluster-upgrade.md#upgradeablefalse-vs-same-minor-updates)
+for root cause, fix (`oc patch clusterversion ... remove /spec/overrides`), and
+warnings about CVO reconciliation.
+
+vlan615-specific override observed before the fix \[[12](#ref-12)\]:
+
+```text
+[{"group":"config.openshift.io","kind":"ClusterImagePolicy","name":"openshift","namespace":"","unmanaged":true}]
+```
+
 ## Autopilot
 
 Overview and enablement (OpenShift Virtualization 4.22 developer preview):
 
-- [Introducing virtualization platform autopilot](https://developers.redhat.com/articles/2026/05/07/introducing-virtualization-platform-autopilot) (Red Hat Developer, 2026-05-07)
+- Introducing virtualization platform autopilot \[[11](#ref-11)\]
 
 Opt in on the HyperConverged CR (`platform.kubevirt.io/autopilot` annotation).
 Use `true` for all framework features, or a comma-separated subset (e.g.
@@ -612,7 +629,7 @@ autopilot’s MC applies — `swapon --show` returns empty (script ends with `sw
 freed. The host can then drop the backing RAM and reuse it for other workloads,
 without classic balloon inflate/deflate. On OpenShift Virtualization it is
 enabled by default for eligible VMs (Linux guest kernel ≥ 5.7 with virtio
-balloon).
+balloon) \[[1](#ref-1)\]\[[2](#ref-2)\]\[[3](#ref-3)\].
 
 ### Verify from HCO operator config
 
@@ -661,8 +678,8 @@ VIRTIO_BALLOON_F_REPORTING (bit 5)=1
 - Kernel `5.14` (≥ 5.7) supports FPR.
 - `virtio_balloon` is loaded and bound to `virtio5`.
 - Sysfs `features` bit **5** (`VIRTIO_BALLOON_F_REPORTING`) is `1` — host and guest
-  negotiated free page reporting (bit 0 is leftmost in that string).
-- `page_reporting_order=9` shows the guest page-reporting framework is active.
+  negotiated free page reporting (bit 0 is leftmost in that string) \[[4](#ref-4)\]\[[5](#ref-5)\].
+- `page_reporting_order=9` shows the guest page-reporting framework is active \[[3](#ref-3)\].
 
 ## KSM (kernel samepage merging)
 
@@ -673,8 +690,7 @@ feature (DP) — node-level dedup with adaptive scan rate and `max_ptes_none=0`
 when KSM is active. It requires `spec.virtualization.ksmConfiguration`
 **unconfigured** (do not set classic HCO KSM). See
 [List features on the cluster](#list-features-on-the-cluster). Docs:
-[Activating KSM](https://docs.redhat.com/en/documentation/openshift_container_platform/4.18/html/virtualization/nodes#virt-activating-ksm),
-[KubeVirt KSM](https://kubevirt.io/user-guide/cluster_admin/ksm/).
+\[[6](#ref-6)\]\[[7](#ref-7)\]\[[8](#ref-8)\]\[[9](#ref-9)\]\[[10](#ref-10)\].
 
 ### Before enable (baseline)
 
@@ -815,6 +831,216 @@ inactive
 
 After workers finish updating, re-check for the tune script / unit and KSM
 sysfs (`run`, `pages_shared` / `pages_sharing`, `max_ptes_none`).
+
+**Post-upgrade (5.0.0 / k8s v1.36.5, 2026-10-30)** — annotations and MC name are
+**unchanged** in 5.0; the same opt-in procedure applies. Verified state on vlan615
+after the 4.x→5.0 upgrade:
+
+```bash
+oc get hyperconverged kubevirt-hyperconverged -n openshift-cnv \
+  -o jsonpath='{.metadata.annotations}{"\n"}'
+oc get mc 99-worker-ksm-zero-only --show-labels
+oc get mcp worker
+oc debug node/d36-h07-000-r660 -- chroot /host bash -c \
+  'echo run=$(cat /sys/kernel/mm/ksm/run); echo pages_shared=$(cat /sys/kernel/mm/ksm/pages_shared); ls /usr/local/bin/kubevirt-ksm-tune.py'
+```
+
+```text
+{"deployOVS":"false","platform.kubevirt.io/autopilot":"descheduler-loadaware,ksm-zero-only","platform.kubevirt.io/enable-ksm-zero-only":"true"}
+
+NAME                      GENERATEDBYCONTROLLER   IGNITIONVERSION   AGE     LABELS
+99-worker-ksm-zero-only                           3.5.0             3d21h   machineconfiguration.openshift.io/role=worker,platform.kubevirt.io/managed-by=virt-platform-autopilot
+
+NAME     CONFIG                                             UPDATED   UPDATING   DEGRADED   MACHINECOUNT   READYMACHINECOUNT   UPDATEDMACHINECOUNT   DEGRADEDMACHINECOUNT   AGE
+worker   rendered-worker-5d8750267fea1a7cf4c898d6a289cbd4   True      False      False      9              9                   9                     0                      17d
+
+run=1
+pages_shared=0
+/usr/local/bin/kubevirt-ksm-tune.py
+```
+
+- `run=1` → KSM active on all workers (tune script applied).
+- `pages_shared=0` / `pages_sharing=0` → no identical pages yet (idle cluster, no memory pressure).
+- Node labels `kubevirt.io/ksm-enabled=false` are expected — that label is for classic HCO-managed KSM, not autopilot's ksm-zero-only.
+- `ksm-zero-only-master` MC is now also `INCLUDED` in `/debug/render` (was absent in 4.22).
+
+> **CNV 5.0 note (per Simone Tiraboschi):** When CNV upgrades to 5.0, autopilot will be
+> **on by default** — the `platform.kubevirt.io/autopilot` annotation will no longer be
+> required. Only `platform.kubevirt.io/enable-ksm-zero-only=true` will be needed to opt
+> in to KSM. This cluster is still on CNV **4.22.12** so the annotation is still required.
+
+## THP (transparent huge pages)
+
+**Host-side sysfs tuning** — the guest OS is unaffected. Autopilot drops
+`/usr/local/bin/kubevirt-thp-tune.py` via MachineConfig `99-worker-thp-tuning` and runs
+it as a oneshot systemd unit at boot. The script sets the following on the node:
+
+| Sysfs knob | Baseline (RHCOS default) | After autopilot |
+| ---------- | ------------------------ | --------------- |
+| `transparent_hugepage/enabled` | `[always]` | `madvise` |
+| `transparent_hugepage/defrag` | `[madvise]` | `madvise` (unchanged) |
+| `transparent_hugepage/shmem_enabled` | `always` | `advise` |
+| `transparent_hugepage/shrink_underused` | `1` (CS10/6.12+) | `0` |
+| `khugepaged/pages_to_scan` | `4096` | `130000` (fixed) |
+| `khugepaged/scan_sleep_millisecs` | `10000` | `1000 + 64000/node_GB` (node-sized) |
+| `khugepaged/max_ptes_none` | `0` | `0` if KSM active, else `511` |
+
+Key points from the script source (`assets/active/machine-config/06-thp-tuning/thp-tune.py`):
+
+- **`enabled=madvise`** (not `always`) — only processes that call `madvise(MADV_HUGEPAGE)`
+  get THP at fault time. **QEMU does this for guest RAM automatically** — so all VM memory
+  gets THP, while system services stay on 4K pages.
+- **`shmem_enabled=advise`** — covers memfd-backed guest RAM used by virtiofs/passt
+  (shmem, not anonymous memory — needs its own knob).
+- **`shrink_underused=0`** — prevents the kernel's deferred underused shrinker from
+  splitting freshly collapsed THPs under memory reclaim (CS10 / kernel 6.12+ only).
+- **`pages_to_scan=130000`** — how many 4K pages khugepaged examines per wake looking
+  for 2 MB collapse candidates (1 region = 512 × 4K pages). `130000 / 512 = ~254
+  regions/wake`, up 32× from the default 4096 (8 regions/wake). The higher budget is
+  needed both for initial sweep of VM guest RAM and to re-collapse PMD splits that KSM
+  or FPR create (KSM deduplicates individual 4K pages, breaking huge pages; THP
+  re-collapses after dedup — the two features are designed to work together).
+- **`scan_sleep_millisecs`** — node-sized: `1000 + 64000/node_GB`
+
+  | Node RAM | sleep | Wakes/s | Sweep (80% VM load) |
+  |---|---|---|---|
+  | 16 GB | 5000 ms | 0.2 | 2.2 min |
+  | 64 GB | 2000 ms | 0.5 | 3.4 min |
+  | 256 GB | 1250 ms | 0.8 | 8.6 min |
+  | 512 GB | 1125 ms | 0.9 | 15.5 min |
+  | 1 TB | 1063 ms | 0.9 | 29.3 min |
+
+  vlan615 nodes have **~503 GB RAM** → `sleep ≈ 1127 ms`, `wakes/s ≈ 0.9`.
+
+- **`max_ptes_none`** — coordinated with KSM: `0` when `ksm/run==1` (same logic as
+  `ksm-tune.py`; start order doesn't matter).
+
+Opt-in annotations:
+
+| Annotation | Effect | Reboot? |
+| ---------- | ------ | ------- |
+| `platform.kubevirt.io/enable-thp-tuning=true` | All sysfs/khugepaged tuning above | No |
+| `platform.kubevirt.io/enable-thp-tuning-kernelcore=true` | `kernelcore=2G movablecore=97%` — grows `ZONE_MOVABLE` so huge page formation succeeds under pressure | Yes |
+
+### Before enable (baseline)
+
+vlan615 (2026-10-30), before autopilot THP opt-in (`d36-h07-000-r660`):
+
+```bash
+oc debug node/d36-h07-000-r660 -- chroot /host bash -c '
+echo enabled=$(cat /sys/kernel/mm/transparent_hugepage/enabled)
+echo defrag=$(cat /sys/kernel/mm/transparent_hugepage/defrag)
+echo scan_sleep_ms=$(cat /sys/kernel/mm/transparent_hugepage/khugepaged/scan_sleep_millisecs)
+echo alloc_sleep_ms=$(cat /sys/kernel/mm/transparent_hugepage/khugepaged/alloc_sleep_millisecs)
+echo pages_to_scan=$(cat /sys/kernel/mm/transparent_hugepage/khugepaged/pages_to_scan)
+echo max_ptes_none=$(cat /sys/kernel/mm/transparent_hugepage/khugepaged/max_ptes_none)
+grep AnonHugePages /proc/meminfo
+grep -o "transparent_hugepage[^ ]*" /proc/cmdline || echo "(not set in cmdline)"
+'
+```
+
+```text
+enabled:   [always] madvise never
+defrag:    always defer defer+madvise [madvise] never
+scan_sleep_ms:  10000
+alloc_sleep_ms: 60000
+pages_to_scan:  4096
+max_ptes_none:  0
+AnonHugePages:  4569088 kB   (~4.4 GiB already collapsed by kernel default)
+(not set in cmdline)
+```
+
+Key observations (what autopilot will change):
+
+- `enabled=always` → will become **`madvise`** — tightens scope to only QEMU (which
+  already calls `MADV_HUGEPAGE` for guest RAM) and removes THP overhead from system services.
+- `defrag=madvise` — already correct, unchanged.
+- `pages_to_scan=4096` → will become **`130000`** — 32× more scanning budget per wake.
+- `scan_sleep_ms=10000` → will become **`~1127 ms`** (503 GB node) — 9× more frequent wakes.
+- `max_ptes_none=0` — already `0` (KSM is active); unchanged.
+- `kernelcore` not set → `ZONE_MOVABLE` small; needs `enable-thp-tuning-kernelcore` (reboot) to fix.
+- `HugePages_Total=0` — no static (hugetlbfs) huge pages; THP is the only huge page path here.
+
+### Enable via Autopilot
+
+Two things required — same pattern as KSM:
+
+1. **`thp-tuning` in the autopilot subset** — add it to `platform.kubevirt.io/autopilot`.
+2. **`platform.kubevirt.io/enable-thp-tuning=true`** annotation on HCO — satisfies the
+   asset condition in `metadata.yaml`.
+
+```bash
+oc annotate hyperconverged kubevirt-hyperconverged -n openshift-cnv \
+  platform.kubevirt.io/autopilot=descheduler-loadaware,ksm-zero-only,thp-tuning --overwrite
+
+oc annotate hyperconverged kubevirt-hyperconverged -n openshift-cnv \
+  platform.kubevirt.io/enable-thp-tuning=true --overwrite
+```
+
+> ⚠️ **Reboot required.** Unlike KSM (which has a `MachineConfiguration` Node Disruption
+> Policy that restarts only the systemd service), THP has no NDP asset — MCO defaults to
+> cordon → reboot for each worker. Expect a full rolling reboot across all workers.
+
+Autopilot applies `99-worker-thp-tuning` MC (labeled
+`platform.kubevirt.io/managed-by=virt-platform-autopilot`). Verify:
+
+```bash
+oc get mc 99-worker-thp-tuning --show-labels
+oc get mcp worker
+```
+
+Example output (vlan615, 2026-10-30):
+
+```text
+NAME                   GENERATEDBYCONTROLLER   IGNITIONVERSION   AGE   LABELS
+99-worker-thp-tuning                           3.5.0             8s    machineconfiguration.openshift.io/role=worker,platform.kubevirt.io/managed-by=virt-platform-autopilot
+
+NAME     CONFIG                                             UPDATED   UPDATING   DEGRADED   MACHINECOUNT   READYMACHINECOUNT   UPDATEDMACHINECOUNT   DEGRADEDMACHINECOUNT   AGE
+worker   rendered-worker-c9edd235927a1713b115f117ef5cb96f   False     True       False      9              0                   0                     0                      17d
+```
+
+After MCP rollout, verify on a node:
+
+```bash
+oc debug node/d37-h14-000-r660 -- chroot /host bash -c '
+echo enabled=$(cat /sys/kernel/mm/transparent_hugepage/enabled)
+echo defrag=$(cat /sys/kernel/mm/transparent_hugepage/defrag)
+echo shmem_enabled=$(cat /sys/kernel/mm/transparent_hugepage/shmem_enabled 2>/dev/null || echo n/a)
+echo shrink_underused=$(cat /sys/kernel/mm/transparent_hugepage/shrink_underused 2>/dev/null || echo n/a)
+echo pages_to_scan=$(cat /sys/kernel/mm/transparent_hugepage/khugepaged/pages_to_scan)
+echo scan_sleep_ms=$(cat /sys/kernel/mm/transparent_hugepage/khugepaged/scan_sleep_millisecs)
+echo max_ptes_none=$(cat /sys/kernel/mm/transparent_hugepage/khugepaged/max_ptes_none)
+systemctl is-active kubevirt-thp-tune.service
+journalctl -u kubevirt-thp-tune.service --no-pager -n 3
+grep AnonHugePages /proc/meminfo
+'
+```
+
+Example output (vlan615, `d37-h14-000-r660`, 2026-10-30):
+
+```text
+enabled=always [madvise] never
+defrag=always defer defer+madvise [madvise] never
+shmem_enabled=always within_size advise [never] deny force
+shrink_underused=n/a
+pages_to_scan=130000
+scan_sleep_ms=1127
+max_ptes_none=0
+active
+Oct 30 20:07:37 d37-h14-000-r660 systemd[1]: Starting Configure THP madvise/defrag mode, khugepaged scan rate, and max_ptes_none...
+Oct 30 20:07:37 d37-h14-000-r660 kubevirt-thp-tune.py[2982]: thp-tune: node=503GB enabled=madvise defrag=madvise pages_to_scan=130000 sleep=1127ms regions/s=224 max_ptes_none=0 (ksm active)
+Oct 30 20:07:37 d37-h14-000-r660 systemd[1]: Finished Configure THP madvise/defrag mode, khugepaged scan rate, and max_ptes_none...
+AnonHugePages:         0 kB
+```
+
+Key results:
+
+- `enabled=[madvise]` — changed from `[always]`; only QEMU (which calls `MADV_HUGEPAGE` for guest RAM) gets THP.
+- `shmem_enabled=[never]` — note: kernel shows current selection; autopilot set it to `advise` but RHCOS kernel may not support this knob — `shrink_underused=n/a` suggests the same (kernel 6.12+ only). **(needs confirmation** — a direct check of `CONFIG_TRANSPARENT_HUGEPAGE` or kernel version would be needed to confirm)**
+- `pages_to_scan=130000` — up from 4096 (32×).
+- `scan_sleep_ms=1127` — down from 10000; formula `1000 + 64000/503 = 1127 ms` for 503 GB node.
+- `max_ptes_none=0` — unchanged (KSM active).
+- `AnonHugePages=0 kB` — expected on an idle node with no VMs running; will increase once QEMU processes start and khugepaged scans their mappings.
 
 ## Descheduler (load-aware)
 
@@ -1141,14 +1367,15 @@ Reachable from the lab network. Service install/ops: `KContext/utils/install-kco
 
 ## References
 
-- [Red Hat OpenShift Virtualization memory management overview](https://developers.redhat.com/articles/2026/10/15/red-hat-openshift-virtualization-memory-management-overview#guest-cooperative-memory-reclamation) — FPR / guest-cooperative reclaim (2026-10-15)
-- [Save memory with OpenShift Virtualization using Free Page Reporting](https://developers.redhat.com/articles/2024/03/13/save-memory-openshift-virtualization-using-free-page-reporting) — (2024-03-13)
-- [Kernel free page reporting](https://docs.kernel.org/mm/free_page_reporting.html)
-- [How to check VIRTIO feature bits inside Linux guests](http://blog.vmsplice.net/2020/05/how-to-check-virtio-feature-bits-inside.html)
-- [Linux `virtio_balloon.h`](https://github.com/torvalds/linux/blob/master/include/uapi/linux/virtio_balloon.h) — `VIRTIO_BALLOON_F_REPORTING` = 5
-- [Activating kernel samepage merging (KSM)](https://docs.redhat.com/en/documentation/openshift_container_platform/4.18/html/virtualization/nodes#virt-activating-ksm) — OCP: activate on memory overload; `ksm-handler-managed` when CNV flips KSM on
-- [OpenShift Virtualization 4.15 release notes (KSM)](https://docs.redhat.com/en/documentation/openshift_container_platform/4.15/html/virtualization/release-notes) — activate KSM when a node is overloaded
-- [KubeVirt KSM Management](https://kubevirt.io/user-guide/cluster_admin/ksm/)
-- [KubeVirt PR #10477 — KSM according to memory pressure](https://github.com/kubevirt/kubevirt/pull/10477)
-- [KubeVirt PR #11306 — `ksm-enabled` label = managed/configured, not live `run`](https://github.com/kubevirt/kubevirt/pull/11306)
-- [Introducing virtualization platform autopilot](https://developers.redhat.com/articles/2026/05/07/introducing-virtualization-platform-autopilot) — (2026-05-07)
+1. <a id="ref-1"></a>[Red Hat OpenShift Virtualization memory management overview](https://developers.redhat.com/articles/2026/10/15/red-hat-openshift-virtualization-memory-management-overview#guest-cooperative-memory-reclamation) — FPR / guest-cooperative reclaim (2026-10-15)
+2. <a id="ref-2"></a>[Save memory with OpenShift Virtualization using Free Page Reporting](https://developers.redhat.com/articles/2024/03/13/save-memory-openshift-virtualization-using-free-page-reporting) — (2024-03-13)
+3. <a id="ref-3"></a>[Kernel free page reporting](https://docs.kernel.org/mm/free_page_reporting.html)
+4. <a id="ref-4"></a>[How to check VIRTIO feature bits inside Linux guests](http://blog.vmsplice.net/2020/05/how-to-check-virtio-feature-bits-inside.html)
+5. <a id="ref-5"></a>[Linux `virtio_balloon.h`](https://github.com/torvalds/linux/blob/master/include/uapi/linux/virtio_balloon.h) — `VIRTIO_BALLOON_F_REPORTING` = 5
+6. <a id="ref-6"></a>[Activating kernel samepage merging (KSM)](https://docs.redhat.com/en/documentation/openshift_container_platform/4.18/html/virtualization/nodes#virt-activating-ksm) — OCP: activate on memory overload; `ksm-handler-managed` when CNV flips KSM on
+7. <a id="ref-7"></a>[OpenShift Virtualization 4.15 release notes (KSM)](https://docs.redhat.com/en/documentation/openshift_container_platform/4.15/html/virtualization/release-notes) — activate KSM when a node is overloaded
+8. <a id="ref-8"></a>[KubeVirt KSM Management](https://kubevirt.io/user-guide/cluster_admin/ksm/)
+9. <a id="ref-9"></a>[KubeVirt PR #10477 — KSM according to memory pressure](https://github.com/kubevirt/kubevirt/pull/10477)
+10. <a id="ref-10"></a>[KubeVirt PR #11306 — `ksm-enabled` label = managed/configured, not live `run`](https://github.com/kubevirt/kubevirt/pull/11306)
+11. <a id="ref-11"></a>[Introducing virtualization platform autopilot](https://developers.redhat.com/articles/2026/05/07/introducing-virtualization-platform-autopilot) — (2026-05-07)
+12. <a id="ref-12"></a>[Red Hat Solution 6994678 — "ClusterVersionUpgradeable" failed because of "ClusterVersionOverridesSet"](https://access.redhat.com/solutions/6994678) — remove `spec.overrides` to unblock upgrades
