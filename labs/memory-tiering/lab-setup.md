@@ -1,6 +1,6 @@
 # Memory tiering — lab setup
 
-**Last Updated:** 2026-10-26
+**Last Updated:** 2026-10-30
 
 Cluster / lab environment and install path for the memory-tiering feature stack
 (swap, KSM zero pages, FPR, descheduler, autopilot).
@@ -35,9 +35,9 @@ Cluster / lab environment and install path for the memory-tiering feature stack
     - [After enable](#after-enable)
   - [THP (transparent huge pages)](#thp-transparent-huge-pages)
     - [Before enable (baseline)](#before-enable-baseline-1)
-    - [Enable via Autopilot](#enable-via-autopilot-3)
+    - [Enable via Autopilot](#enable-via-autopilot-2)
   - [Descheduler (load-aware)](#descheduler-load-aware)
-    - [Enable via autopilot](#enable-via-autopilot-2)
+    - [Enable via autopilot](#enable-via-autopilot-3)
     - [KubeDescheduler instance](#kubedescheduler-instance)
     - [PSI kernel argument](#psi-kernel-argument)
     - [Policy / Prometheus metrics](#policy--prometheus-metrics)
@@ -262,23 +262,16 @@ nvme0n1   2.9T disk
 
 ### Cluster upgrade to 5.0
 
-Upgrade blocked by `ClusterVersionUpgradeable` / `ClusterVersionOverridesSet`. Root
-cause: `spec.overrides` on `ClusterVersion/version` marks `ClusterImagePolicy/openshift`
-as `unmanaged: true`, so CVO can no longer reconcile it — it won't proceed with an
-upgrade it can't guarantee is safe \[[12](#ref-12)\].
+Upgrade was initially blocked by `Upgradeable=False` / `ClusterVersionOverridesSet`.
+See the runbook [cluster-upgrade § Upgradeable=False vs same-minor updates](../../runbooks/cluster-admin/cluster-upgrade.md#upgradeablefalse-vs-same-minor-updates)
+for root cause, fix (`oc patch clusterversion ... remove /spec/overrides`), and
+warnings about CVO reconciliation.
 
-```bash
-# inspect
-oc get clusterversion version -o jsonpath='{.spec.overrides}{"\n"}'
-# [{"group":"config.openshift.io","kind":"ClusterImagePolicy","name":"openshift","namespace":"","unmanaged":true}]
+vlan615-specific override observed before the fix \[[12](#ref-12)\]:
 
-# fix: hand ownership back to CVO
-oc patch clusterversion version --type json -p '[{"op": "remove", "path": "/spec/overrides"}]'
+```text
+[{"group":"config.openshift.io","kind":"ClusterImagePolicy","name":"openshift","namespace":"","unmanaged":true}]
 ```
-
-> ⚠️ CVO will reconcile `ClusterImagePolicy/openshift` back to its desired state — any
-> manual edits to that object will be reverted. Use a separate `ClusterImagePolicy` CR
-> for custom image/registry policies instead of overriding the `openshift` one.
 
 ## Autopilot
 
@@ -901,8 +894,12 @@ Key points from the script source (`assets/active/machine-config/06-thp-tuning/t
   (shmem, not anonymous memory — needs its own knob).
 - **`shrink_underused=0`** — prevents the kernel's deferred underused shrinker from
   splitting freshly collapsed THPs under memory reclaim (CS10 / kernel 6.12+ only).
-- **`pages_to_scan=130000`** — ~254 regions/wake (1 region = 512 pages = 2 MB); enough
-  budget to re-collapse PMD splits caused by KSM or free-page-reporting.
+- **`pages_to_scan=130000`** — how many 4K pages khugepaged examines per wake looking
+  for 2 MB collapse candidates (1 region = 512 × 4K pages). `130000 / 512 = ~254
+  regions/wake`, up 32× from the default 4096 (8 regions/wake). The higher budget is
+  needed both for initial sweep of VM guest RAM and to re-collapse PMD splits that KSM
+  or FPR create (KSM deduplicates individual 4K pages, breaking huge pages; THP
+  re-collapses after dedup — the two features are designed to work together).
 - **`scan_sleep_millisecs`** — node-sized: `1000 + 64000/node_GB`
 
   | Node RAM | sleep | Wakes/s | Sweep (80% VM load) |
@@ -1039,7 +1036,7 @@ AnonHugePages:         0 kB
 Key results:
 
 - `enabled=[madvise]` — changed from `[always]`; only QEMU (which calls `MADV_HUGEPAGE` for guest RAM) gets THP.
-- `shmem_enabled=[never]` — note: kernel shows current selection; autopilot set it to `advise` but RHCOS kernel may not support this knob — `shrink_underused=n/a` confirms the same (kernel 6.12+ only).
+- `shmem_enabled=[never]` — note: kernel shows current selection; autopilot set it to `advise` but RHCOS kernel may not support this knob — `shrink_underused=n/a` suggests the same (kernel 6.12+ only). **(needs confirmation** — a direct check of `CONFIG_TRANSPARENT_HUGEPAGE` or kernel version would be needed to confirm)**
 - `pages_to_scan=130000` — up from 4096 (32×).
 - `scan_sleep_ms=1127` — down from 10000; formula `1000 + 64000/503 = 1127 ms` for 503 GB node.
 - `max_ptes_none=0` — unchanged (KSM active).
