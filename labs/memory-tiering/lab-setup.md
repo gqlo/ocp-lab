@@ -19,6 +19,7 @@ Cluster / lab environment and install path for the memory-tiering feature stack
     - [Worker SSH (bastion key)](#worker-ssh-bastion-key)
     - [CNV installation](#cnv-installation)
     - [LVMCluster (LVMS / SSD)](#lvmcluster-lvms--ssd)
+    - [Cluster upgrade to 5.0](#cluster-upgrade-to-50)
   - [Autopilot](#autopilot)
     - [List features on the cluster](#list-features-on-the-cluster)
   - [SWAP](#swap)
@@ -256,11 +257,31 @@ nvme0n1   2.9T disk
 
 `sdb` is `LVM2_member` under VG `lvm-d37-h14-000-r660-ssd-storage` (full free — no LVs yet). `sdc` / `nvme0n1` unused.
 
+### Cluster upgrade to 5.0
+
+Upgrade blocked by `ClusterVersionUpgradeable` / `ClusterVersionOverridesSet`. Root
+cause: `spec.overrides` on `ClusterVersion/version` marks `ClusterImagePolicy/openshift`
+as `unmanaged: true`, so CVO can no longer reconcile it — it won't proceed with an
+upgrade it can't guarantee is safe \[[12](#ref-12)\].
+
+```bash
+# inspect
+oc get clusterversion version -o jsonpath='{.spec.overrides}{"\n"}'
+# [{"group":"config.openshift.io","kind":"ClusterImagePolicy","name":"openshift","namespace":"","unmanaged":true}]
+
+# fix: hand ownership back to CVO
+oc patch clusterversion version --type json -p '[{"op": "remove", "path": "/spec/overrides"}]'
+```
+
+> ⚠️ CVO will reconcile `ClusterImagePolicy/openshift` back to its desired state — any
+> manual edits to that object will be reverted. Use a separate `ClusterImagePolicy` CR
+> for custom image/registry policies instead of overriding the `openshift` one.
+
 ## Autopilot
 
 Overview and enablement (OpenShift Virtualization 4.22 developer preview):
 
-- [Introducing virtualization platform autopilot](https://developers.redhat.com/articles/2026/05/07/introducing-virtualization-platform-autopilot) (Red Hat Developer, 2026-05-07)
+- Introducing virtualization platform autopilot \[[11](#ref-11)\]
 
 Opt in on the HyperConverged CR (`platform.kubevirt.io/autopilot` annotation).
 Use `true` for all framework features, or a comma-separated subset (e.g.
@@ -612,7 +633,7 @@ autopilot’s MC applies — `swapon --show` returns empty (script ends with `sw
 freed. The host can then drop the backing RAM and reuse it for other workloads,
 without classic balloon inflate/deflate. On OpenShift Virtualization it is
 enabled by default for eligible VMs (Linux guest kernel ≥ 5.7 with virtio
-balloon).
+balloon) \[[1](#ref-1)\]\[[2](#ref-2)\]\[[3](#ref-3)\].
 
 ### Verify from HCO operator config
 
@@ -661,8 +682,8 @@ VIRTIO_BALLOON_F_REPORTING (bit 5)=1
 - Kernel `5.14` (≥ 5.7) supports FPR.
 - `virtio_balloon` is loaded and bound to `virtio5`.
 - Sysfs `features` bit **5** (`VIRTIO_BALLOON_F_REPORTING`) is `1` — host and guest
-  negotiated free page reporting (bit 0 is leftmost in that string).
-- `page_reporting_order=9` shows the guest page-reporting framework is active.
+  negotiated free page reporting (bit 0 is leftmost in that string) \[[4](#ref-4)\]\[[5](#ref-5)\].
+- `page_reporting_order=9` shows the guest page-reporting framework is active \[[3](#ref-3)\].
 
 ## KSM (kernel samepage merging)
 
@@ -673,8 +694,7 @@ feature (DP) — node-level dedup with adaptive scan rate and `max_ptes_none=0`
 when KSM is active. It requires `spec.virtualization.ksmConfiguration`
 **unconfigured** (do not set classic HCO KSM). See
 [List features on the cluster](#list-features-on-the-cluster). Docs:
-[Activating KSM](https://docs.redhat.com/en/documentation/openshift_container_platform/4.18/html/virtualization/nodes#virt-activating-ksm),
-[KubeVirt KSM](https://kubevirt.io/user-guide/cluster_admin/ksm/).
+\[[6](#ref-6)\]\[[7](#ref-7)\]\[[8](#ref-8)\]\[[9](#ref-9)\]\[[10](#ref-10)\].
 
 ### Before enable (baseline)
 
@@ -1141,14 +1161,15 @@ Reachable from the lab network. Service install/ops: `KContext/utils/install-kco
 
 ## References
 
-- [Red Hat OpenShift Virtualization memory management overview](https://developers.redhat.com/articles/2026/10/15/red-hat-openshift-virtualization-memory-management-overview#guest-cooperative-memory-reclamation) — FPR / guest-cooperative reclaim (2026-10-15)
-- [Save memory with OpenShift Virtualization using Free Page Reporting](https://developers.redhat.com/articles/2024/03/13/save-memory-openshift-virtualization-using-free-page-reporting) — (2024-03-13)
-- [Kernel free page reporting](https://docs.kernel.org/mm/free_page_reporting.html)
-- [How to check VIRTIO feature bits inside Linux guests](http://blog.vmsplice.net/2020/05/how-to-check-virtio-feature-bits-inside.html)
-- [Linux `virtio_balloon.h`](https://github.com/torvalds/linux/blob/master/include/uapi/linux/virtio_balloon.h) — `VIRTIO_BALLOON_F_REPORTING` = 5
-- [Activating kernel samepage merging (KSM)](https://docs.redhat.com/en/documentation/openshift_container_platform/4.18/html/virtualization/nodes#virt-activating-ksm) — OCP: activate on memory overload; `ksm-handler-managed` when CNV flips KSM on
-- [OpenShift Virtualization 4.15 release notes (KSM)](https://docs.redhat.com/en/documentation/openshift_container_platform/4.15/html/virtualization/release-notes) — activate KSM when a node is overloaded
-- [KubeVirt KSM Management](https://kubevirt.io/user-guide/cluster_admin/ksm/)
-- [KubeVirt PR #10477 — KSM according to memory pressure](https://github.com/kubevirt/kubevirt/pull/10477)
-- [KubeVirt PR #11306 — `ksm-enabled` label = managed/configured, not live `run`](https://github.com/kubevirt/kubevirt/pull/11306)
-- [Introducing virtualization platform autopilot](https://developers.redhat.com/articles/2026/05/07/introducing-virtualization-platform-autopilot) — (2026-05-07)
+1. <a id="ref-1"></a>[Red Hat OpenShift Virtualization memory management overview](https://developers.redhat.com/articles/2026/10/15/red-hat-openshift-virtualization-memory-management-overview#guest-cooperative-memory-reclamation) — FPR / guest-cooperative reclaim (2026-10-15)
+2. <a id="ref-2"></a>[Save memory with OpenShift Virtualization using Free Page Reporting](https://developers.redhat.com/articles/2024/03/13/save-memory-openshift-virtualization-using-free-page-reporting) — (2024-03-13)
+3. <a id="ref-3"></a>[Kernel free page reporting](https://docs.kernel.org/mm/free_page_reporting.html)
+4. <a id="ref-4"></a>[How to check VIRTIO feature bits inside Linux guests](http://blog.vmsplice.net/2020/05/how-to-check-virtio-feature-bits-inside.html)
+5. <a id="ref-5"></a>[Linux `virtio_balloon.h`](https://github.com/torvalds/linux/blob/master/include/uapi/linux/virtio_balloon.h) — `VIRTIO_BALLOON_F_REPORTING` = 5
+6. <a id="ref-6"></a>[Activating kernel samepage merging (KSM)](https://docs.redhat.com/en/documentation/openshift_container_platform/4.18/html/virtualization/nodes#virt-activating-ksm) — OCP: activate on memory overload; `ksm-handler-managed` when CNV flips KSM on
+7. <a id="ref-7"></a>[OpenShift Virtualization 4.15 release notes (KSM)](https://docs.redhat.com/en/documentation/openshift_container_platform/4.15/html/virtualization/release-notes) — activate KSM when a node is overloaded
+8. <a id="ref-8"></a>[KubeVirt KSM Management](https://kubevirt.io/user-guide/cluster_admin/ksm/)
+9. <a id="ref-9"></a>[KubeVirt PR #10477 — KSM according to memory pressure](https://github.com/kubevirt/kubevirt/pull/10477)
+10. <a id="ref-10"></a>[KubeVirt PR #11306 — `ksm-enabled` label = managed/configured, not live `run`](https://github.com/kubevirt/kubevirt/pull/11306)
+11. <a id="ref-11"></a>[Introducing virtualization platform autopilot](https://developers.redhat.com/articles/2026/05/07/introducing-virtualization-platform-autopilot) — (2026-05-07)
+12. <a id="ref-12"></a>[Red Hat Solution 6994678 — "ClusterVersionUpgradeable" failed because of "ClusterVersionOverridesSet"](https://access.redhat.com/solutions/6994678) — remove `spec.overrides` to unblock upgrades
