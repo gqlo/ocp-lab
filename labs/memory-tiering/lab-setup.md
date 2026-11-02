@@ -1361,6 +1361,8 @@ I1019 19:15:15.619063       1 profile.go:417] "Total number of evictions/request
 I1019 19:15:15.619073       1 descheduler.go:252] "Number of evictions/requests" totalEvicted=0 evictionRequests=0
 ```
 
+<a id="esxi-install-idrac-redfish"></a>
+
 ## ESXi install (iDRAC Redfish)
 
 Bare-metal **VMware ESXi** install on a Scale Lab Dell node via **iDRAC Redfish** virtual
@@ -1733,11 +1735,12 @@ curl -sk -u "$AUTH" -X PATCH \
   }'
 ```
 
-Once ESXi is running, open the **Host Client** in a browser (`https://<mgmt-ip>/ui` or the hostname). Example after install on this node (2026-11-02) — standalone ESXi 9.0 Dell Customized, eval license, mgmt `10.1.88.97`:
+Once ESXi is running, open the **Host Client** (web console) in a browser. Example after install on this node (2026-11-02) — standalone ESXi 9.0 Dell Customized, eval license, mgmt `10.1.88.97`:
 
 | Item | Value |
 | ---- | ----- |
-| Host Client | `https://d35-h19-000-r660.rdu2.scalelab.redhat.com/ui` (or `https://10.1.88.97/ui`) |
+| Host Client (console) | [https://d35-h19-000-r660.rdu2.scalelab.redhat.com/ui/#/login](https://d35-h19-000-r660.rdu2.scalelab.redhat.com/ui/#/login) |
+| Alternate URL | `https://10.1.88.97/ui/#/login` |
 | Version | ESXi 9.0.0.0.0.24755229 (Dell Customized) |
 | Hardware | Dell PowerEdge R660 — 56× Xeon Gold 5420+, ~512 GiB RAM |
 | vmk0 | `10.1.88.97` |
