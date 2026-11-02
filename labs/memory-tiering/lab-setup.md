@@ -1,6 +1,6 @@
 # Memory tiering — lab setup
 
-**Last Updated:** 2026-10-30
+**Last Updated:** 2026-11-02
 
 Cluster / lab environment and install path for the memory-tiering feature stack
 (swap, KSM zero pages, FPR, descheduler, autopilot).
@@ -42,6 +42,14 @@ Cluster / lab environment and install path for the memory-tiering feature stack
     - [PSI kernel argument](#psi-kernel-argument)
     - [Policy / Prometheus metrics](#policy--prometheus-metrics)
     - [Verify](#verify)
+  - [ESXi install (iDRAC Redfish)](#esxi-install-idrac-redfish)
+    - [Target host / env](#target-host--env)
+    - [Inspect boot order and power](#inspect-boot-order-and-power)
+    - [Virtual CD (before mount)](#virtual-cd-before-mount)
+    - [Mount ISO via InsertMedia](#mount-iso-via-insertmedia)
+    - [One-time boot from CD + reboot](#one-time-boot-from-cd--reboot)
+    - [After install](#after-install)
+    - [Find ESXi in BootOrder and make it first](#find-esxi-in-bootorder-and-make-it-first)
   - [Alerting dashboard (KContext)](#alerting-dashboard-kcontext)
 
 <!-- markdown-toc end -->
@@ -1352,6 +1360,354 @@ I1019 19:15:15.619048       1 lownodeutilization.go:334] "All nodes are under ta
 I1019 19:15:15.619063       1 profile.go:417] "Total number of evictions/requests" extension point="Balance" evictedPods=0 evictionRequests=0
 I1019 19:15:15.619073       1 descheduler.go:252] "Number of evictions/requests" totalEvicted=0 evictionRequests=0
 ```
+
+## ESXi install (iDRAC Redfish)
+
+Bare-metal **VMware ESXi** install on a Scale Lab Dell node via **iDRAC Redfish** virtual
+media (ISO URL) + one-time UEFI boot override. Captured 2026-11-02 on
+`d35-h19-000-r660` (mgmt FQDN below). Useful for competitive / migration lab work
+alongside OpenShift Virtualization.
+
+> ⚠️ Mounting Virtual CD does **not** put CD first in `BootOrder`. Use
+> `BootSourceOverride` (`Once` + `Cd`). Virtual CD often **never** appears in
+> `BootOptions` even after a successful mount — that is normal on iDRAC.
+
+Related Jetlag / iDRAC VirtualMedia note:
+[idrac10-virtualmediainsert-community-general](../../troubleshooting/jetlag/idrac10-virtualmediainsert-community-general.md).
+
+### Target host / env
+
+| Item | Value |
+| ---- | ----- |
+| Host | `d35-h19-000-r660` (Dell R660) |
+| BMC | `https://mgmt-d35-h19-000-r660.rdu2.scalelab.redhat.com` |
+| Redfish system | `/redfish/v1/Systems/System.Embedded.1` |
+| Redfish manager | `/redfish/v1/Managers/iDRAC.Embedded.1` |
+| Virtual CD | `.../VirtualMedia/CD` |
+| ISO | Dell custom ESXi 9.0 installer (see URL below) |
+| Quads `pm_type` | `pxe_ipmitool` (power via IPMI; Redfish still works for media/boot) |
+
+```bash
+BMC=https://mgmt-d35-h19-000-r660.rdu2.scalelab.redhat.com
+AUTH='quads:<bmc-password>'   # from Quads / inventory; do not commit secrets
+
+ISO='https://perfscale.perf.eng.bos2.dc.redhat.com/pub/saipramod/VMware_ISOs/VMware-VMvisor-Installer-9.0.0.0-24755229.x86_64-Dell-CI-A00.iso'
+```
+
+iDRAC must reach the ISO URL from the **management** network. Prefer HTTP if HTTPS/TLS fails on the BMC.
+
+### Inspect boot order and power
+
+```bash
+curl -sk -u "$AUTH" \
+  "$BMC/redfish/v1/Systems/System.Embedded.1" \
+  | python3 -c 'import sys,json; d=json.load(sys.stdin); print(json.dumps(d.get("Boot"), indent=2)); print("Power:", d.get("PowerState"))'
+```
+
+Example output (2026-11-02):
+
+```text
+{
+  "BootOptions": {
+    "@odata.id": "/redfish/v1/Systems/System.Embedded.1/BootOptions"
+  },
+  "Certificates": {
+    "@odata.id": "/redfish/v1/Systems/System.Embedded.1/Boot/Certificates"
+  },
+  "BootOrder": [
+    "Boot0003",
+    "Boot0004",
+    "Boot0000",
+    "Boot0001",
+    "Boot0002",
+    "Boot0005"
+  ],
+  "BootOrder@odata.count": 6,
+  "BootSourceOverrideEnabled": "Disabled",
+  "BootSourceOverrideMode": "UEFI",
+  "BootSourceOverrideTarget": "None",
+  "UefiTargetBootSourceOverride": null,
+  "BootSourceOverrideTarget@Redfish.AllowableValues": [
+    "None",
+    "Pxe",
+    "Floppy",
+    "Cd",
+    "Hdd",
+    "BiosSetup",
+    "Utilities",
+    "UefiTarget",
+    "SDCard",
+    "UefiHttp"
+  ],
+  "StopBootOnFault": "Never"
+}
+Power: On
+```
+
+`BootOrder` entries are opaque IDs — resolve display names:
+
+```bash
+for id in Boot0003 Boot0004 Boot0000 Boot0001 Boot0002 Boot0005; do
+  echo -n "$id: "
+  curl -sk -u "$AUTH" \
+    "$BMC/redfish/v1/Systems/System.Embedded.1/BootOptions/$id" \
+    | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("DisplayName") or d.get("Name") or d)'
+done
+```
+
+Example resolved order (same host):
+
+```text
+Boot0003: PXE Device 1: Integrated NIC 1 Port 1 Partition 1 - Broadcom Adv. Dual 25Gb Ethernet - 04:32:01:AB:60:C0 - IPv4
+Boot0004: RAID Controller in SL 3: Red Hat Enterprise Linux
+Boot0000: PXE Device 2: NIC in Slot 1 Port 2 Partition 1 - Intel(R) Ethernet 25G 2P E810-XXV Adapter - B4:83:51:10:51:75 - IPv4
+Boot0001: RAID Controller in SL 3: EFI RAID Disk PlaceHolder - Disk 3
+Boot0002: RAID Controller in SL 3: EFI RAID Disk PlaceHolder - Disk 2
+Boot0005: Unavailable: redhat
+```
+
+So without override the host tries **PXE first**, then the existing **RHEL** install on the RAID controller.
+
+> ⚠️ Disk already has RHEL. During ESXi install, choose the target disk carefully (or wipe intentionally).
+
+### Virtual CD (before mount)
+
+```bash
+curl -sk -u "$AUTH" \
+  "$BMC/redfish/v1/Managers/iDRAC.Embedded.1/VirtualMedia/CD" \
+  | python3 -m json.tool
+```
+
+Example (idle):
+
+```text
+ConnectedVia: NotConnected
+Image: null
+Inserted: false
+```
+
+With nothing inserted, Virtual CD typically **does not** appear in `BootOptions`.
+
+### Mount ISO via InsertMedia
+
+```bash
+curl -sk -u "$AUTH" -X POST \
+  "$BMC/redfish/v1/Managers/iDRAC.Embedded.1/VirtualMedia/CD/Actions/VirtualMedia.InsertMedia" \
+  -H 'Content-Type: application/json' \
+  -d "{
+    \"Image\": \"$ISO\",
+    \"Inserted\": true,
+    \"WriteProtected\": true
+  }"
+```
+
+Verify:
+
+```bash
+curl -sk -u "$AUTH" \
+  "$BMC/redfish/v1/Managers/iDRAC.Embedded.1/VirtualMedia/CD" \
+  | python3 -c 'import sys,json; d=json.load(sys.stdin); print("Inserted:", d["Inserted"]); print("Image:", d["Image"]); print("ConnectedVia:", d["ConnectedVia"])'
+```
+
+Example (success):
+
+```text
+Inserted: True
+Image: https://perfscale.perf.eng.bos2.dc.redhat.com/pub/saipramod/VMware_ISOs/VMware-VMvisor-Installer-9.0.0.0-24755229.x86_64-Dell-CI-A00.iso
+ConnectedVia: URI
+```
+
+After mount, `BootOptions` may still list only the same six entries (no Virtual CD) — **expected**. Do not wait for CD to show up in `BootOrder`; use override.
+
+### One-time boot from CD + reboot
+
+```bash
+# One-time UEFI boot from Virtual CD (does not rewrite BootOrder)
+curl -sk -u "$AUTH" -X PATCH \
+  "$BMC/redfish/v1/Systems/System.Embedded.1" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "Boot": {
+      "BootSourceOverrideEnabled": "Once",
+      "BootSourceOverrideTarget": "Cd",
+      "BootSourceOverrideMode": "UEFI"
+    }
+  }'
+```
+
+Example response excerpt:
+
+```text
+Base.1.12.Success — The request completed successfully.
+IDRAC.2.9.SYS430 — ... to make them immediately effective, restart the host server.
+```
+
+Confirm:
+
+```bash
+curl -sk -u "$AUTH" \
+  "$BMC/redfish/v1/Systems/System.Embedded.1" \
+  | python3 -c 'import sys,json; b=json.load(sys.stdin)["Boot"]; print(b["BootSourceOverrideEnabled"], b["BootSourceOverrideTarget"], b["BootSourceOverrideMode"])'
+```
+
+```text
+Once Cd UEFI
+```
+
+Reboot (watch install in iDRAC HTML5 console):
+
+```bash
+curl -sk -u "$AUTH" -X POST \
+  "$BMC/redfish/v1/Systems/System.Embedded.1/Actions/ComputerSystem.Reset" \
+  -H 'Content-Type: application/json' \
+  -d '{"ResetType": "GracefulRestart"}'
+
+# If needed:
+# -d '{"ResetType": "ForceRestart"}'
+```
+
+After this boot, override clears and the host returns to normal `BootOrder` (PXE → RHEL/RAID unless you change it).
+
+Successful boot into the ESXi 9.0 installer (iDRAC console, 2026-11-02) — Virtual CD + `Once Cd UEFI` worked; Secure Boot not enabled:
+
+![ESXi installer loading — iDRAC console on d35-h19-000-r660](esxi-installer-loading-idrac.png)
+
+### After install
+
+Keep Virtual Media mounted until the installer finishes, then eject:
+
+```bash
+curl -sk -u "$AUTH" -X POST \
+  "$BMC/redfish/v1/Managers/iDRAC.Embedded.1/VirtualMedia/CD/Actions/VirtualMedia.EjectMedia" \
+  -H 'Content-Type: application/json' \
+  -d '{}'
+```
+
+If media is already gone, iDRAC may return `IDRAC.2.9.VRM0009` (“No Virtual Media devices are currently connected”) — ignore that.
+
+After install, a new UEFI entry appears (e.g. **VMware ESXi**). Default `BootOrder` often still prefers **PXE** then old **RHEL**, so the host may not boot ESXi until you reorder — see next subsection.
+
+Post-install checklist (fill in as configured): management NIC / IP, DNS/NTP, hostname, SSH / Host Client access, datastore, evaluation license status.
+
+### Find ESXi in BootOrder and make it first
+
+**Goal:** identify which `Boot00xx` ID is ESXi, put it first, and reboot so the pending order becomes live.
+
+#### 1. List boot options and resolve names
+
+IDs change after install (new members appear). Always re-list:
+
+```bash
+curl -sk -u "$AUTH" \
+  "$BMC/redfish/v1/Systems/System.Embedded.1/BootOptions" \
+  | python3 -m json.tool
+
+for id in $(curl -sk -u "$AUTH" \
+  "$BMC/redfish/v1/Systems/System.Embedded.1/BootOptions" \
+  | python3 -c 'import sys,json; print(" ".join(m["@odata.id"].split("/")[-1] for m in json.load(sys.stdin)["Members"]))'); do
+  echo -n "$id: "
+  curl -sk -u "$AUTH" \
+    "$BMC/redfish/v1/Systems/System.Embedded.1/BootOptions/$id" \
+    | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("DisplayName") or d.get("Name"))'
+done
+```
+
+Example after ESXi install on `d35-h19-000-r660` (2026-11-02):
+
+```text
+Boot0003: PXE Device 1: Integrated NIC 1 Port 1 ... Broadcom ...
+Boot0004: RAID Controller in SL 3: Red Hat Enterprise Linux
+Boot0000: PXE Device 2: NIC in Slot 1 Port 2 ... Intel E810 ...
+Boot0001: RAID Controller in SL 3: EFI RAID Disk PlaceHolder - Disk 3
+Boot0007: RAID Controller in SL 3: VMware ESXi          ← use this
+Boot0005: Unavailable: redhat
+Boot0006: Virtual Optical Drive                         ← do not put first
+```
+
+Here **`Boot0007`** is ESXi. Do **not** prefer `Virtual Optical Drive` (installer) or PXE.
+
+#### 2. See live vs pending BootOrder
+
+On iDRAC, a successful BootOrder PATCH often updates **pending** (`.../Settings`) only. **LIVE** stays old until reboot:
+
+```bash
+curl -sk -u "$AUTH" \
+  "$BMC/redfish/v1/Systems/System.Embedded.1" \
+  | python3 -c 'import sys,json; print("LIVE:", json.load(sys.stdin)["Boot"]["BootOrder"])'
+
+curl -sk -u "$AUTH" \
+  "$BMC/redfish/v1/Systems/System.Embedded.1/Settings" \
+  | python3 -c 'import sys,json; d=json.load(sys.stdin); print("PENDING:", d.get("Boot",{}).get("BootOrder"))'
+```
+
+#### 3. Set ESXi first
+
+PATCH either the system or Settings (both accepted on this iDRAC; verify PENDING afterward). Replace `Boot0007` if your ID differs:
+
+```bash
+curl -sk -u "$AUTH" -X PATCH \
+  "$BMC/redfish/v1/Systems/System.Embedded.1" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "Boot": {
+      "BootOrder": [
+        "Boot0007",
+        "Boot0004",
+        "Boot0003",
+        "Boot0000",
+        "Boot0001",
+        "Boot0005",
+        "Boot0006"
+      ]
+    }
+  }'
+```
+
+Example: PATCH returned `Base.1.12.Success` + `IDRAC.2.9.SYS430` (“restart the host server” to make effective), while LIVE still showed the old order:
+
+```text
+LIVE:    ['Boot0003', 'Boot0004', 'Boot0000', 'Boot0001', 'Boot0007', 'Boot0005', 'Boot0006']
+PENDING: ['Boot0007', 'Boot0004', 'Boot0003', 'Boot0000', 'Boot0001', 'Boot0005', 'Boot0006']
+```
+
+If PENDING is empty or still wrong, PATCH Settings explicitly:
+
+```bash
+curl -sk -u "$AUTH" -X PATCH \
+  "$BMC/redfish/v1/Systems/System.Embedded.1/Settings" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "Boot": {
+      "BootOrder": [
+        "Boot0007",
+        "Boot0004",
+        "Boot0003",
+        "Boot0000",
+        "Boot0001",
+        "Boot0005",
+        "Boot0006"
+      ]
+    }
+  }'
+```
+
+#### 4. Reboot and confirm LIVE
+
+```bash
+curl -sk -u "$AUTH" -X POST \
+  "$BMC/redfish/v1/Systems/System.Embedded.1/Actions/ComputerSystem.Reset" \
+  -H 'Content-Type: application/json' \
+  -d '{"ResetType":"ForceRestart"}'
+
+# After host is back:
+curl -sk -u "$AUTH" \
+  "$BMC/redfish/v1/Systems/System.Embedded.1" \
+  | python3 -c 'import sys,json; print("LIVE:", json.load(sys.stdin)["Boot"]["BootOrder"])'
+```
+
+Expect LIVE to start with the ESXi ID (`Boot0007` here). iDRAC console should show ESXi DCUI, not PXE or RHEL.
+
+Optional one-shot if BootOrder will not stick: `BootSourceOverrideEnabled=Once` with `BootSourceOverrideTarget=UefiTarget` and `UefiTargetBootSourceOverride` set to the ESXi boot option id (e.g. `Boot0007`).
 
 ## Alerting dashboard (KContext)
 
