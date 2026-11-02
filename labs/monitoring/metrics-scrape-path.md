@@ -4,6 +4,28 @@ How metrics flow from a node exporter to Prometheus storage — verified on a li
 
 **Last Updated:** 2026-11-02
 
+## Catalog
+
+**Table of Contents**
+
+- [OCP Metrics Scrape Path](#ocp-metrics-scrape-path)
+  - [Catalog](#catalog)
+  - [Overview](#overview)
+  - [Exporter process: how `node_exporter` is started](#exporter-process-how-node_exporter-is-started)
+  - [Walk a live node with `ss` (discovery)](#walk-a-live-node-with-ss-discovery)
+    - [1. What is talking to `node_exporter`?](#1-what-is-talking-to-node_exporter)
+    - [2. Which process owns the peer port?](#2-which-process-owns-the-peer-port)
+    - [3. Who is listening, and on which addresses?](#3-who-is-listening-and-on-which-addresses)
+    - [4. Who is connected to kube-rbac-proxy `:9100`?](#4-who-is-connected-to-kube-rbac-proxy-9100)
+    - [5. Put it together](#5-put-it-together)
+  - [Processes Involved (from `pstree`)](#processes-involved-from-pstree)
+  - [kube-rbac-proxy Role](#kube-rbac-proxy-role)
+    - [Verify auth vs open exporter](#verify-auth-vs-open-exporter)
+  - [Prometheus Storage](#prometheus-storage)
+  - [What Happens if the Node Network Goes Down](#what-happens-if-the-node-network-goes-down)
+  - [Scrape Interval and Ports](#scrape-interval-and-ports)
+  - [Related](#related)
+
 ---
 
 ## Overview

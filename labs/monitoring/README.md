@@ -8,7 +8,7 @@ Lab notes for **Prometheus cardinality**, **KubeVirt metrics**, **VM dirty rate 
 
 | Doc | Topic |
 | --- | ----- |
-| [metrics-scrape-path.md](metrics-scrape-path.md) | End-to-end metrics scrape path: exporter → kube-rbac-proxy → prometheus-k8s. Verified connection state, ports, HA dual-scrape, and network-down behaviour |
+| [metrics-scrape-path.md](metrics-scrape-path.md) | End-to-end scrape path: `node_exporter` flags → `ss` discovery (localhost + SNAT peers) → kube-rbac-proxy TLS/RBAC (401/200) → prometheus-k8s HA / Thanos; network-down behaviour |
 | [top-metric-sample-count.md](top-metric-sample-count.md) | Query Prometheus TSDB from `prometheus-k8s`: total head series, top metric names by series count, verify sums, filter KubeVirt / OVN / Ceph |
 | [kubevirt-metrics-exporter-coo.md](kubevirt-metrics-exporter-coo.md) | Deploy kubevirt-metrics-exporter + COO Perses storage-latency dashboard |
 | [qemu-monitor-dirty-rate-calculation.md](qemu-monitor-dirty-rate-calculation.md) | How QEMU `calc-dirty-rate` / `query-dirty-rate` work via `virsh qemu-monitor-command` (libvirt passthrough → KVM dirty bitmap) |

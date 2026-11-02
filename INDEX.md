@@ -32,7 +32,7 @@ Primary lookup for humans and AI. Prefer matching **symptoms** / error strings f
 | PVC vs snapshot vs clone (Ceph) | storage | [pvc-vs-snapshot-clone](labs/storage/pvc-vs-snapshot-clone.md) |
 | CDI DataSource clone vs HTTP import; LVMS HostClone; boot images / default SC | storage | [cdi-datasource-vs-http-import](labs/storage/cdi-datasource-vs-http-import.md) |
 | NetApp Trident NFS SVM setup | storage | [netapp-setup-notes](labs/storage/netapp/netapp-setup-notes.md) |
-| Prometheus cardinality, KME/COO, diskstats, dirty rate | monitoring | [monitoring catalog](labs/monitoring/README.md) |
+| Prometheus cardinality, KME/COO, diskstats, dirty rate; node_exporter scrape path; `ss` / kube-rbac-proxy / SNAT peers; `:9100` / `:9101` | monitoring | [monitoring catalog](labs/monitoring/README.md) · [metrics-scrape-path](labs/monitoring/metrics-scrape-path.md) |
 | High-scale cluster / ODF config notes | scale | [high-scale-config-notes](labs/scale/high-scale-config-notes.md) |
 | CNV memory tiering (swap, KSM, FPR, THP, transparent huge pages, descheduler, autopilot); KContext alerting dashboard; env / install; `ClusterVersionOverridesSet` upgrade blocker; ESXi install / iDRAC Redfish / VirtualMedia / BootSourceOverride / BootOrder LIVE vs PENDING (comparison host) | virtualization + scale | [memory-tiering lab-setup](labs/memory-tiering/lab-setup.md) |
 | Fedora CSB bootable USB | os-install | [fedora-csb-installation](labs/os-install/fedora-csb-installation.md) |
