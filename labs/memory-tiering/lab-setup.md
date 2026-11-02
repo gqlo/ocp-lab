@@ -1389,10 +1389,18 @@ Related Jetlag / iDRAC VirtualMedia note:
 
 ```bash
 BMC=https://mgmt-d35-h19-000-r660.rdu2.scalelab.redhat.com
-AUTH='quads:<bmc-password>'   # from Quads / inventory; do not commit secrets
+# Prefer ~/.netrc so the password is not in shell history / process list:
+#   machine mgmt-d35-h19-000-r660.rdu2.scalelab.redhat.com
+#   login quads
+#   password <bmc-password>
+# then: curl --netrc -sk ...
+# Fallback (lab only; do not commit secrets):
+AUTH='quads:<bmc-password>'
 
 ISO='https://perfscale.perf.eng.bos2.dc.redhat.com/pub/saipramod/VMware_ISOs/VMware-VMvisor-Installer-9.0.0.0-24755229.x86_64-Dell-CI-A00.iso'
 ```
+
+Examples below use `curl -sk -u "$AUTH"`. Swap to `curl --netrc -sk` if using `~/.netrc`.
 
 iDRAC must reach the ISO URL from the **management** network. Prefer HTTP if HTTPS/TLS fails on the BMC.
 
@@ -1570,7 +1578,7 @@ After this boot, override clears and the host returns to normal `BootOrder` (PXE
 
 Successful boot into the ESXi 9.0 installer (iDRAC console, 2026-11-02) — Virtual CD + `Once Cd UEFI` worked; Secure Boot not enabled:
 
-![ESXi installer loading — iDRAC console on d35-h19-000-r660](esxi-installer-loading-idrac.png)
+![ESXi installer loading — iDRAC console on d35-h19-000-r660](esxi-installer-loading-idrac.jpg)
 
 ### After install
 
@@ -1735,7 +1743,7 @@ Once ESXi is running, open the **Host Client** in a browser (`https://<mgmt-ip>/
 | vmk0 | `10.1.88.97` |
 | License | 90-day evaluation (warning banner) |
 
-![ESXi 9.0 Host Client — Dell R660 host d35-h19-000-r660.rdu2.scalelab.redhat.com at 10.1.88.97 (standalone, 90-day eval)](esxi-host-client-post-install.png)
+![ESXi 9.0 Host Client — Dell R660 host d35-h19-000-r660.rdu2.scalelab.redhat.com at 10.1.88.97 (standalone, 90-day eval)](esxi-host-client-post-install.jpg)
 
 ## Alerting dashboard (KContext)
 
