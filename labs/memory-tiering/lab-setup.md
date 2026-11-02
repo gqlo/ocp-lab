@@ -20,6 +20,7 @@ Cluster / lab environment and install path for the memory-tiering feature stack
     - [CNV installation](#cnv-installation)
     - [LVMCluster (LVMS / SSD)](#lvmcluster-lvms--ssd)
     - [Cluster upgrade to 5.0](#cluster-upgrade-to-50)
+    - [Switch to RHEL 10 kernel stream](#switch-to-rhel-10-kernel-stream)
   - [Autopilot](#autopilot)
     - [List features on the cluster](#list-features-on-the-cluster)
   - [SWAP](#swap)
@@ -280,6 +281,36 @@ vlan615-specific override observed before the fix \[[12](#ref-12)\]:
 
 ```text
 [{"group":"config.openshift.io","kind":"ClusterImagePolicy","name":"openshift","namespace":"","unmanaged":true}]
+```
+
+### Switch to RHEL 10 kernel stream
+
+Upgrading from **4.22 → 5.0** keeps the **RHEL 9.8 kernel stream** by default. A fresh
+5.0 install defaults to the **RHEL 10** image stream, so no action is needed there.
+
+To switch an upgraded cluster's nodes to the RHEL 10.2 kernel stream, patch each MCP:
+
+```bash
+# Find MCP names first
+oc get mcp
+
+# Patch each MCP (typically master and worker)
+oc patch mcp worker --type merge -p '{"spec":{"osImageStream":{"name":"rhel-10"}}}'
+oc patch mcp master --type merge -p '{"spec":{"osImageStream":{"name":"rhel-10"}}}'
+```
+
+> ⚠️ This triggers a **rolling reboot** of all nodes in the MCP. Wait for
+> `UPDATED=True` before patching the next MCP.
+
+```bash
+# Watch rollout progress
+oc get mcp -w
+```
+
+To revert to RHEL 9 (e.g. for testing), patch with `rhel-9` instead:
+
+```bash
+oc patch mcp worker --type merge -p '{"spec":{"osImageStream":{"name":"rhel-9"}}}'
 ```
 
 ## Autopilot
