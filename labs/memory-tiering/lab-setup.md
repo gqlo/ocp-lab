@@ -50,6 +50,7 @@ Cluster / lab environment and install path for the memory-tiering feature stack
     - [One-time boot from CD + reboot](#one-time-boot-from-cd--reboot)
     - [After install](#after-install)
     - [Find ESXi in BootOrder and make it first](#find-esxi-in-bootorder-and-make-it-first)
+    - [Host Client (web console)](#host-client-web-console)
   - [Alerting dashboard (KContext)](#alerting-dashboard-kcontext)
 
 <!-- markdown-toc end -->
@@ -1597,7 +1598,7 @@ If media is already gone, iDRAC may return `IDRAC.2.9.VRM0009` (“No Virtual Me
 
 After install, a new UEFI entry appears (e.g. **VMware ESXi**). Default `BootOrder` often still prefers **PXE** then old **RHEL**, so the host may not boot ESXi until you reorder — see next subsection.
 
-Post-install checklist (captured on this host after ESXi was up — see Host Client screenshot below): management NIC / IP, DNS/NTP, hostname, SSH / Host Client access, datastore, evaluation license status.
+Post-install checklist: management NIC / IP, DNS/NTP, hostname, SSH / [Host Client](#host-client-web-console) access, datastore, evaluation license status.
 
 ### Find ESXi in BootOrder and make it first
 
@@ -1735,16 +1736,23 @@ curl -sk -u "$AUTH" -X PATCH \
   }'
 ```
 
-Once ESXi is running, open the **Host Client** (web console) in a browser. Example after install on this node (2026-11-02) — standalone ESXi 9.0 Dell Customized, eval license, mgmt `10.1.88.97`:
+### Host Client (web console)
+
+After ESXi is up (DCUI on the iDRAC console is enough to confirm boot), manage the host from a browser via the **ESXi Host Client** — the built-in web UI (no vCenter required).
+
+Login URL for this lab host (`d35-h19-000-r660`, 2026-11-02):
 
 | Item | Value |
 | ---- | ----- |
-| Host Client (console) | [https://d35-h19-000-r660.rdu2.scalelab.redhat.com/ui/#/login](https://d35-h19-000-r660.rdu2.scalelab.redhat.com/ui/#/login) |
-| Alternate URL | `https://10.1.88.97/ui/#/login` |
+| Host Client (login) | [https://d35-h19-000-r660.rdu2.scalelab.redhat.com/ui/#/login](https://d35-h19-000-r660.rdu2.scalelab.redhat.com/ui/#/login) |
+| Alternate (by IP) | `https://10.1.88.97/ui/#/login` |
+| User | `root` (password set during ESXi installer) |
 | Version | ESXi 9.0.0.0.0.24755229 (Dell Customized) |
 | Hardware | Dell PowerEdge R660 — 56× Xeon Gold 5420+, ~512 GiB RAM |
 | vmk0 | `10.1.88.97` |
-| License | 90-day evaluation (warning banner) |
+| License | 90-day evaluation (warning banner on summary) |
+
+Reachable from the lab network (accept the self-signed cert warning). Standalone — not joined to vCenter.
 
 ![ESXi 9.0 Host Client — Dell R660 host d35-h19-000-r660.rdu2.scalelab.redhat.com at 10.1.88.97 (standalone, 90-day eval)](esxi-host-client-post-install.jpg)
 
