@@ -1587,7 +1587,7 @@ If media is already gone, iDRAC may return `IDRAC.2.9.VRM0009` (“No Virtual Me
 
 After install, a new UEFI entry appears (e.g. **VMware ESXi**). Default `BootOrder` often still prefers **PXE** then old **RHEL**, so the host may not boot ESXi until you reorder — see next subsection.
 
-Post-install checklist (fill in as configured): management NIC / IP, DNS/NTP, hostname, SSH / Host Client access, datastore, evaluation license status.
+Post-install checklist (captured on this host after ESXi was up — see Host Client screenshot below): management NIC / IP, DNS/NTP, hostname, SSH / Host Client access, datastore, evaluation license status.
 
 ### Find ESXi in BootOrder and make it first
 
@@ -1707,7 +1707,35 @@ curl -sk -u "$AUTH" \
 
 Expect LIVE to start with the ESXi ID (`Boot0007` here). iDRAC console should show ESXi DCUI, not PXE or RHEL.
 
+> **Note:** On this iDRAC, PATCH BootOrder often only updates **PENDING** (`.../Settings`); LIVE can stay PXE-first across a plain `ForceRestart` until Settings are actually applied (or they clear to `[]`). If LIVE will not stick, use a one-shot override (below) to boot ESXi once.
+
 Optional one-shot if BootOrder will not stick: `BootSourceOverrideEnabled=Once` with `BootSourceOverrideTarget=UefiTarget` and `UefiTargetBootSourceOverride` set to the ESXi boot option id (e.g. `Boot0007`).
+
+```bash
+curl -sk -u "$AUTH" -X PATCH \
+  "$BMC/redfish/v1/Systems/System.Embedded.1" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "Boot": {
+      "BootSourceOverrideEnabled": "Once",
+      "BootSourceOverrideMode": "UEFI",
+      "BootSourceOverrideTarget": "UefiTarget",
+      "UefiTargetBootSourceOverride": "Boot0007"
+    }
+  }'
+```
+
+Once ESXi is running, open the **Host Client** in a browser (`https://<mgmt-ip>/ui` or the hostname). Example after install on this node (2026-11-02) — standalone ESXi 9.0 Dell Customized, eval license, mgmt `10.1.88.97`:
+
+| Item | Value |
+| ---- | ----- |
+| Host Client | `https://d35-h19-000-r660.rdu2.scalelab.redhat.com/ui` (or `https://10.1.88.97/ui`) |
+| Version | ESXi 9.0.0.0.0.24755229 (Dell Customized) |
+| Hardware | Dell PowerEdge R660 — 56× Xeon Gold 5420+, ~512 GiB RAM |
+| vmk0 | `10.1.88.97` |
+| License | 90-day evaluation (warning banner) |
+
+![ESXi 9.0 Host Client — Dell R660 host d35-h19-000-r660.rdu2.scalelab.redhat.com at 10.1.88.97 (standalone, 90-day eval)](esxi-host-client-post-install.png)
 
 ## Alerting dashboard (KContext)
 
