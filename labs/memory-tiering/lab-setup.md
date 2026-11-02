@@ -1036,7 +1036,7 @@ AnonHugePages:         0 kB
 Key results:
 
 - `enabled=[madvise]` — changed from `[always]`; only QEMU (which calls `MADV_HUGEPAGE` for guest RAM) gets THP.
-- `shmem_enabled=[never]` — note: kernel shows current selection; autopilot set it to `advise` but RHCOS kernel may not support this knob — `shrink_underused=n/a` suggests the same (kernel 6.12+ only). **(needs confirmation** — a direct check of `CONFIG_TRANSPARENT_HUGEPAGE` or kernel version would be needed to confirm)**
+- `shmem_enabled=[never]` — note: kernel shows current selection; autopilot set it to `advise` but RHCOS kernel may not support this knob — `shrink_underused=n/a` suggests the same (kernel 6.12+ only). **(needs confirmation — a direct check of `CONFIG_TRANSPARENT_HUGEPAGE` or kernel version would be needed to confirm)**
 - `pages_to_scan=130000` — up from 4096 (32×).
 - `scan_sleep_ms=1127` — down from 10000; formula `1000 + 64000/503 = 1127 ms` for 503 GB node.
 - `max_ptes_none=0` — unchanged (KSM active).
