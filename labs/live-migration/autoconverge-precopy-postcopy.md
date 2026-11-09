@@ -211,13 +211,18 @@ HyperConverged CRD: *“size of the guest (both RAM and migrated disks, if any)�
 
 ### Why 800 → 20 helps post-copy
 
+> `800` here is **this cluster's prior configured value**, not an upstream default — the
+> KubeVirt default is `150` and HyperConverged often ships `20` (see
+> [Defaults and how they combine](#defaults-and-how-they-combine) below). The point is the
+> direction: a large value to a small one.
+
 Does not make post-copy “better.” It **ends the pre-copy wait sooner** so `MigrateStartPostCopy` can fire (when `allowPostCopy` is true). Without post-copy enabled, a lower value only aborts/pauses sooner.
 
 Example 6 GiB RAM guest:
 
-| Value | Pre-copy budget |
+| `completionTimeoutPerGiB` | Pre-copy budget |
 | --- | --- |
-| 800 | ~4800 s ≈ 1h20m |
+| 800 (prior config) | ~4800 s ≈ 1h20m |
 | 20 | ~120 s ≈ 2 min |
 
 ---
