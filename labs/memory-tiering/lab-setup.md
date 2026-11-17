@@ -1,6 +1,6 @@
 # Memory tiering — lab setup
 
-**Last Updated:** 2026-11-02
+**Last Updated:** 2026-11-09
 
 Cluster / lab environment and install path for the memory-tiering feature stack
 (swap, KSM zero pages, FPR, descheduler, autopilot).
@@ -52,6 +52,7 @@ Cluster / lab environment and install path for the memory-tiering feature stack
     - [After install](#after-install)
     - [Find ESXi in BootOrder and make it first](#find-esxi-in-bootorder-and-make-it-first)
     - [Host Client (web console)](#host-client-web-console)
+    - [Create a VM on a routable VLAN](#create-a-vm-on-a-routable-vlan)
   - [Alerting dashboard (KContext)](#alerting-dashboard-kcontext)
 
 <!-- markdown-toc end -->
@@ -1786,6 +1787,142 @@ Login URL for this lab host (`d35-h19-000-r660`, 2026-11-02):
 Reachable from the lab network (accept the self-signed cert warning). Standalone — not joined to vCenter.
 
 ![ESXi 9.0 Host Client — Dell R660 host d35-h19-000-r660.rdu2.scalelab.redhat.com at 10.1.88.97 (standalone, 90-day eval)](esxi-host-client-post-install.jpg)
+
+### Create a VM on a routable VLAN
+
+Put a VM on the Scale Lab **routable/public VLAN** so it gets a real IP and internet
+(e.g. to register RHEL). Two parts: (1) add an ESXi **port group** for the VLAN and
+confirm the uplink/tagging, (2) work around a Host Client bug to actually launch the VM
+on it. Captured 2026-11-09 on `d35-h19-000-r660`.
+
+| Item | Value |
+| ---- | ----- |
+| Management (keep as-is) | `vmk0` on `vmnic0`/`vSwitch0`, DHCP `10.1.88.97/22`, gw `10.1.91.254` (already has internet) |
+| Routable VLAN | **615**, delivered to **`vmnic1`** (Broadcom OCP port 1, MAC `04:32:01:ab:60:c1`) |
+| Tagging | **access / untagged** on the switch port → ESXi port group VLAN ID **0** (do **not** tag 615) |
+| Public subnet | `10.1.62.0/25` (`255.255.255.128`), gateway `10.1.62.126` |
+| vSwitch / port group | `vSwitchPub` → `PubNet` |
+| DNS | use the **lab** resolver (`esxcli network ip dns server list`), **not** `8.8.8.8` (public resolvers are blocked) |
+
+#### 1. Identify which uplink carries the VLAN
+
+The routable VLAN is wired to the **last NIC** of each node — a Scale Lab convention,
+documented per host in the **lab inventory JSON** (the same inventory list Jetlag consumes,
+under `jetlag/ansible/inventory/`). That JSON lists each node's NICs (with MACs); the VLAN
+is on the **last entry**.
+
+> ⚠️ "Last NIC" in the inventory is **not** the same as the highest `vmnicN`. ESXi numbers
+> `vmnicN` by PCI enumeration order, which differs from the inventory/physical order — on
+> `d35-h19-000-r660` the inventory's last NIC maps to **`vmnic1`**, not `vmnic5`. Always
+> resolve by **MAC**, never by the vmnic number.
+
+Take the last NIC's MAC from the inventory JSON and map it to a `vmnicN`:
+
+```bash
+esxcli network nic list     # match the inventory MAC -> vmnicN
+```
+
+Here the inventory's last-NIC MAC `04:32:01:ab:60:c1` = **`vmnic1`**.
+
+Optional sanity check that a port is cabled/live — driver RX counters tick up from raw
+frames even on an unconfigured NIC (unlike `pktcap-uw --uplink ... UplinkRcv`, whose
+capture hook only exists once the uplink is on a vSwitch, so it reads 0 on a bare NIC):
+
+```bash
+esxcli network nic stats get -n vmnic1 | grep -i "Packets received"
+```
+
+#### 2. Add the port group
+
+```bash
+esxcli network vswitch standard add -v vSwitchPub
+esxcli network vswitch standard uplink add -u vmnic1 -v vSwitchPub
+esxcli network vswitch standard portgroup add -p PubNet -v vSwitchPub
+esxcli network vswitch standard portgroup set -p PubNet --vlan-id 0   # access/untagged
+```
+
+> ⚠️ **Tagged vs untagged is the #1 gotcha.** This switch port is an **access** port for
+> VLAN 615, so it hands frames **untagged**. Setting `--vlan-id 615` makes ESXi double-tag
+> and the switch silently drops everything (100% ping loss at L2). Leave the port group at
+> **VLAN 0**. If your port were a trunk, you'd set the real VLAN ID instead.
+
+#### 3. (Optional) Assign a host VMkernel IP to test reachability
+
+Not required for VMs, but handy to prove L2 works before building a VM. `.18` is this
+test `vmk1`; pick a different free address for VMs.
+
+```bash
+esxcli network ip interface add -i vmk1 -p PubNet
+esxcli network ip interface ipv4 set -i vmk1 -I 10.1.62.18 -N 255.255.255.128 -t static
+vmkping -I vmk1 10.1.62.126     # gateway — must reply (ttl=64, <5ms) if tagging is right
+```
+
+With the wrong tag this `vmkping` is 100% loss; with VLAN 0 it succeeds. Remove later with
+`esxcli network ip interface remove -i vmk1` if you don't need the host on this subnet.
+
+Find a free IP to use (from the lab VPN / a host on the subnet, **not** from ESXi which
+can't scan): `nmap -sn 10.1.62.0/25`. Always reserve your pick with the lab.
+
+#### 4. Create the VM — Host Client dropdown workaround
+
+> ⚠️ **Host Client bug:** the New-VM / Edit-settings **Network dropdown does not render a
+> CLI-created port group** (`PubNet` is missing; only `VM Network` shows). This persisted
+> across hard refresh, private window, a different browser, `/etc/init.d/hostd restart`,
+> **and a full host reboot**, even though hostd knows the port group
+> (`vim-cmd hostsvc/net/info` lists `key-vim.host.PortGroup-PubNet`). It's a UI rendering
+> issue, not a config problem.
+
+> ⚠️ **Don't hand-write a `.vmx`** to work around it — a minimal hand-authored `.vmx`
+> **segfaults the `vmx` binary** on this ESXi 9 build (power-on dies with "Failed to
+> establish transport connection"; `vmware.log` shows a `Panic`/backtrace). Let the UI
+> generate a complete, correct `.vmx`.
+
+Working recipe — create via the UI on `VM Network`, then flip the NIC to `PubNet` from the
+shell (hostd knows `PubNet`, so this attaches cleanly):
+
+1. In the Host Client, run **New VM** normally (guest OS `rhel10_64Guest`, disk, attach the
+   RHEL 10 ISO from `[datastore1] iso/`), choose **`VM Network`** for the network, finish —
+   **do not power on**.
+2. Reassign its NIC to `PubNet` and reload:
+
+   ```bash
+   vim-cmd vmsvc/getallvms                      # find VMID + .vmx path
+   VMX="/vmfs/volumes/datastore1/rhel-10/rhel-10.vmx"
+   sed -i 's/^ethernet0.networkName = .*/ethernet0.networkName = "PubNet"/' "$VMX"
+   vim-cmd vmsvc/reload <VMID>
+   grep networkName "$VMX"                       # should now read "PubNet"
+   ```
+3. Power on and open the console:
+
+   ```bash
+   vim-cmd vmsvc/power.on <VMID>
+   vim-cmd vmsvc/power.getstate <VMID>
+   ```
+
+#### 5. Guest install (RHEL 10) — network + registration
+
+The `rhel-10.2-x86_64-boot.iso` is a **netinstall**, so it needs working network + a repo
+during install. In Anaconda:
+
+- **Network & Hostname** → enable the NIC; set **static** IPv4: address `10.1.62.x`, netmask
+  `/25` (`255.255.255.128`), gateway `10.1.62.126`, **DNS = lab resolver** (from
+  `esxcli network ip dns server list` on the host). The VLAN is untagged, so set **no** VLAN
+  inside the guest.
+- **Installation Source** → RHEL 10 BaseOS repo URL (CDN/Satellite/lab mirror).
+
+> Registration failing with **"name or service not known"** is a **DNS** failure — the NIC
+> had no working resolver. Using `8.8.8.8` doesn't help here (blocked); use the lab DNS.
+> Debug from the installer shell (**Ctrl+Alt+F2**): `ip a`, `ip route`, `cat /etc/resolv.conf`,
+> `ping 10.1.62.126`, `nslookup subscription.rhsm.redhat.com`.
+
+After install, make the guest config persistent (the installer does this) and verify:
+
+```bash
+ip a; ip route; ping -c2 10.1.62.126; ping -c2 redhat.com
+```
+
+Leave `vSwitchPub` / `PubNet` in place — that's what the VM uses. Clean up any scratch
+switches (`vSwitchSniff`) or failed hand-made VMs from experimentation.
 
 ## Alerting dashboard (KContext)
 
