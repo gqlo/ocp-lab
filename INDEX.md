@@ -8,6 +8,7 @@ Primary lookup for humans and AI. Prefer matching **symptoms** / error strings f
 | ------------------- | ------ | ---- |
 | OSD pods Running but `ceph osd` up count low; Rook 24h sleep; UDN / OVS overflow; OSDs flapping across zones | networking + storage | [udn-odf-osd-flapping](troubleshooting/networking/udn-odf-osd-flapping/udn-odf-osd-flapping.md) |
 | DNS resolution failures on OpenShift | networking | [dns-resolution-error](troubleshooting/networking/dns-resolution-issue/dns-resolution-error.md) |
+| All NICs down; `Failed to find a suitable node IP`; `NO-CARRIER`; `Link detected: no`; BMC console; GRUB `single` | networking | [rhcos-all-nics-down-no-carrier](troubleshooting/networking/rhcos-all-nics-down-no-carrier/rhcos-all-nics-down-no-carrier.md) |
 | `virtctl ssh` timeout; VMI status IP is `10.0.2.2` (masquerade guest IP) | virtualization | [kubevirt-vm-ssh-trace](troubleshooting/virtualization/kubevirt-vm-ssh-trace/kubevirt-vm-ssh-trace.md) |
 | VM stuck at Starting; CPU starve / iDRAC | virtualization | [vm-stuck-at-starting](troubleshooting/virtualization/vm-stuck-at-starting/vm-stuck-at-starting.md) |
 | MCP drain stuck; Rook/ODF PDBs vs `maxUnavailable`; OSD eviction blocks drain | storage | [odf-pdb-vs-mcp-drain](troubleshooting/storage/odf-pdb-vs-mcp-drain.md) |
